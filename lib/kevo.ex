@@ -50,7 +50,7 @@ defmodule Kevo do
            post_login(username, password, serialized_client, verification_token),
          {:ok, code} <- get_unikey_code(unikey_redirect_location),
          {:ok, stuff} <- post_jwt(code, code_verifier) do
-      {:ok, stuff}
+      stuff
     end
   end
 
@@ -139,12 +139,15 @@ defmodule Kevo do
         DateTime.utc_now()
         |> DateTime.add(expires_in)
 
+      %{"sub" => user_id} = JOSE.decode(id_token)
+
       {:ok,
        %{
          :access_token => access_token,
          :id_token => id_token,
          :refresh_token => refresh_token,
-         :expires_at => expires_at
+         :expires_at => expires_at,
+         :user_id => user_id
        }}
     end
   end
@@ -184,6 +187,22 @@ defmodule Kevo do
     {request_verification_token, serialized_client}
   end
 
+  def get_locks(access_token) do
+    with {:ok, snonce} <- server_nonce() do
+      # find a means to handle the JWT reauthorization in Finch.
+    end
+  end
+
+  defp headers(access_token, server_nonce) do
+    %{
+      "X-unikey-cnonce" => client_nonce(),
+      "X-unikey-context" => "Web",
+      "X-unikey-nonce" => server_nonce,
+      "Authorization" => "Bearer " + access_token,
+      "Accept" => "application/json"
+    }
+  end
+
   @spec generate_certificate(device_uuid4 :: binary()) :: binary()
   def generate_certificate(device_uuid4) do
     e = DateTime.utc_now() |> DateTime.to_unix()
@@ -200,6 +219,29 @@ defmodule Kevo do
         length_encoded_byte(53, :crypto.strong_rand_bytes(32)) <>
         length_encoded_byte(54, :crypto.strong_rand_bytes(32))
     )
+  end
+
+  def client_nonce() do
+    Base.encode64(:crypto.strong_rand_bytes(64))
+  end
+
+  def server_nonce() do
+    body =
+      Jason.encode!(%{
+        "headers" => %{"Accept" => "application/json"}
+      })
+
+    req =
+      Finch.build(
+        @unikey_api_url_base <> "/api/v2/nonces",
+        [{"Content-Type", "application/json"}],
+        body
+      )
+
+    with {:ok, %Finch.Response{status: 200, headers: headers}} <- Finch.request(req, KevoFinch) do
+      {"x-unikey-nonce", server_nonce} = List.keyfind(headers, "x-unikey-nonce", 0)
+      {:ok, server_nonce}
+    end
   end
 
   # uncertain what this entails
