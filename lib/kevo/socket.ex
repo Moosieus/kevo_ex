@@ -1,9 +1,8 @@
 defmodule Kevo.Socket do
   use WebSockex
 
-  @user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
-
   @unikey_ws_url_base "wss://resi-prd-ws.unikey.com"
+  @user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
 
   def start_link({auth_token, server_nonce, user_id}) do
     state = %{
@@ -36,7 +35,7 @@ defmodule Kevo.Socket do
 
     # may need to escape the following characters: !~*'()
 
-    "#{Kevo.unikey_ws_url_base()}/v3/web/#{user_id}?#{query}"
+    "#{@unikey_ws_url_base}/v3/web/#{user_id}?#{query}"
   end
 
   # Generate the verification value used to connect to the websocket.
