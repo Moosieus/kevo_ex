@@ -216,10 +216,15 @@ defmodule Kevo.API do
 
   # Doing Oauth 2.0
   @spec request(request :: %Finch.Request{}, auth :: %Kevo.API.Auth{}) :: {:ok, %Finch.Response{}}
-  def request(request, %Kevo.API.Auth{access_token: access_token, refresh_token: refresh_token, expires_at: expires_at}) do
+  def request(request, %Kevo.API.Auth{
+        access_token: access_token,
+        refresh_token: refresh_token,
+        expires_at: expires_at
+      }) do
     case expires_at < unix_now() + 100 do
       true ->
         "foo"
+
       false ->
         # hard stop here: Need to encapsulate this stuff into a GenServer to wrap the authentication state.
         with {:ok, refresh} <- post_refresh(refresh_token) do
@@ -229,7 +234,6 @@ defmodule Kevo.API do
 
     headers = headers(access_token, Kevo.API.get_server_nonce())
   end
-
 
   # need to reauthenticate on expired refresh tokens
   def post_refresh(refresh_token) do
@@ -254,12 +258,13 @@ defmodule Kevo.API do
         "expires_in" => expires_in
       } = Jason.decode!(body)
 
-      {:ok, %Kevo.API.Refresh{
-        :access_token => access_token,
-        :id_token => id_token,
-        :refresh_token => refresh_token,
-        :expires_at => expires_at(expires_in)
-      }}
+      {:ok,
+       %Kevo.API.Refresh{
+         :access_token => access_token,
+         :id_token => id_token,
+         :refresh_token => refresh_token,
+         :expires_at => expires_at(expires_in)
+       }}
     end
   end
 
