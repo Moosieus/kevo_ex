@@ -255,7 +255,7 @@ defmodule Kevo.API do
         "expires_in" => expires_in
       } = Jason.decode!(body)
 
-      %{"sub" => user_id} = JOSE.decode(id_token) # stuck here
+      {:ok, %{"sub" => user_id}} = Joken.peek_claims(id_token) # stuck here
 
       {:ok,
        %Kevo.API.Auth{
