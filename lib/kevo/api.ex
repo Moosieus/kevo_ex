@@ -99,17 +99,17 @@ defmodule Kevo.API do
   end
 
   defp login(username, password) do
-    {code_challenge, code_verifier} = Kevo.Pkce.generate_pkce_pair()
+    {code_verifier, code_challenge} = Kevo.Pkce.generate_pkce_pair()
     device_id = UUID.uuid4()
     auth_url = auth_url(code_challenge, device_id)
 
     with {:ok, login_page_url} <- get_login_url(auth_url),
          {:ok, login_form, cookies} <- get_login_page(login_page_url),
          {verification_token, serialized_client} <- scrape_login_form(login_form),
-         {:ok, unikey_redirect_location} <-
+         {:ok, unikey_redirect_location, cookies} <-
            post_login(username, password, cookies, serialized_client, verification_token),
-         {:ok, code} <- get_unikey_code(unikey_redirect_location),
-         {:ok, auth} <- post_jwt(code, code_verifier) do
+         {:ok, code} <- get_unikey_code(unikey_redirect_location, cookies),
+         {:ok, auth} <- post_jwt(code, code_verifier, cookies) do
       {:ok, auth}
     else
       error ->
@@ -119,116 +119,6 @@ defmodule Kevo.API do
   end
 
   # Login sub-functions
-
-  defp get_login_url(auth_url) do
-    req = Finch.build(:get, auth_url)
-
-    with {:ok, %Finch.Response{status: 302, headers: headers} = resp} <-
-           Finch.request(req, KevoFinch) do
-      {"location", redirect_location} = List.keyfind!(headers, "location", 0)
-      {:ok, redirect_location}
-    else
-      {:ok, response} -> {:error, {:get_login_url, response}}
-    end
-  end
-
-  defp get_login_page(url) do
-    req = Finch.build(:get, url)
-
-    with {:ok, %Finch.Response{status: 200, body: login_form, headers: headers}} <-
-           Finch.request(req, KevoFinch) do
-      {:ok, login_form, get_cookies(headers)}
-    else
-      {:ok, response} -> {:error, {:get_login_page, response}}
-    end
-  end
-
-  defp post_login(username, password, cookies, serialized_client, verification_token) do
-    req =
-      Finch.build(
-        :post,
-        @unikey_login_url_base <> "#{}/account/login",
-        [
-          {"Cookie", Enum.join(cookies, "; ")},
-          {"host", "identity.unikey.com"},
-          {"accept", "*/*"},
-          {"content-type", "application/x-www-form-urlencoded"}
-        ],
-        www_form_encode(%{
-          "SerializedClient" => serialized_client,
-          "NumFailedAttempts" => "0",
-          "Username" => username,
-          "Password" => password,
-          "login" => "",
-          "__RequestVerificationToken" => verification_token
-        })
-      )
-
-    IO.inspect(req, label: "Final Request")
-
-    with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
-      case List.keyfind(headers, "location", 0) do
-        # need to type/kind this (what did I mean by this?)
-        {"location", redirect_location} ->
-          {:ok, redirect_location}
-
-        _ ->
-          {:error, :invalid_login}
-      end
-    else
-      {:ok, response} -> {:error, {:post_login, response}}
-    end
-  end
-
-  defp get_unikey_code(location) do
-    Logger.info(msg: "get_unikey_code", location: location)
-    req = Finch.build(:get, @unikey_login_url_base <> location)
-
-    with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
-      {"location", redirect_location} = List.keyfind(headers, "location", 0)
-      %URI{fragment: fragment} = URI.parse(redirect_location)
-      %URI{query: query} = URI.parse(fragment)
-      %{"code" => code} = URI.decode_query(query)
-      {:ok, code}
-    end
-  end
-
-  defp post_jwt(code, code_verifier) do
-    req =
-      Finch.build(
-        :post,
-        @unikey_login_url_base <> "/connect/token",
-        [],
-        Jason.encode!(%{
-          "client_id" => client_id(),
-          "client_secret" => client_secret(),
-          "code" => code,
-          "code_verifier" => code_verifier,
-          "grant_type" => "authorization_code",
-          "redirect_uri" => "https://mykevo.com/#/token"
-        })
-      )
-
-    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch) do
-      %{
-        "access_token" => access_token,
-        "id_token" => id_token,
-        "refresh_token" => refresh_token,
-        "expires_in" => expires_in
-      } = Jason.decode!(body)
-
-      %{"sub" => user_id} = JOSE.decode(id_token)
-
-      {:ok,
-       %Kevo.API.Auth{
-         :access_token => access_token,
-         :id_token => id_token,
-         :refresh_token => refresh_token,
-         :expires_in => expires_in,
-         :user_id => user_id
-       }}
-    end
-  end
 
   defp auth_url(code_challenge, device_uuid4) do
     certificate = generate_certificate(device_uuid4)
@@ -255,6 +145,29 @@ defmodule Kevo.API do
       )
   end
 
+  defp get_login_url(auth_url) do
+    req = Finch.build(:get, auth_url)
+
+    with {:ok, %Finch.Response{status: 302, headers: headers} = resp} <-
+           Finch.request(req, KevoFinch) do
+      {"location", redirect_location} = List.keyfind!(headers, "location", 0)
+      {:ok, redirect_location}
+    else
+      {:ok, response} -> {:error, {:get_login_url, response}}
+    end
+  end
+
+  defp get_login_page(url) do
+    req = Finch.build(:get, url)
+
+    with {:ok, %Finch.Response{status: 200, body: login_form, headers: headers}} <-
+           Finch.request(req, KevoFinch) do
+      {:ok, login_form, get_cookies(headers)}
+    else
+      {:ok, response} -> {:error, {:get_login_page, response}}
+    end
+  end
+
   defp scrape_login_form(html) do
     %{"token" => request_verification_token} =
       Regex.named_captures(
@@ -266,6 +179,95 @@ defmodule Kevo.API do
       Regex.named_captures(~r/<input.* name="SerializedClient".* value="(?<token>.*)"/, html)
 
     {request_verification_token, HtmlEntities.decode(serialized_client)}
+  end
+
+  defp post_login(username, password, cookies, serialized_client, verification_token) do
+    req =
+      Finch.build(
+        :post,
+        @unikey_login_url_base <> "#{}/account/login",
+        [
+          {"Cookie", Enum.join(cookies, "; ")},
+          {"host", "identity.unikey.com"},
+          {"accept", "*/*"},
+          {"content-type", "application/x-www-form-urlencoded"}
+        ],
+        www_form_encode(%{
+          "SerializedClient" => serialized_client,
+          "NumFailedAttempts" => "0",
+          "Username" => username,
+          "Password" => password,
+          "login" => "",
+          "__RequestVerificationToken" => verification_token
+        })
+      )
+
+    with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
+      {"set-cookie", cookie} = List.keyfind!(headers, "set-cookie", 0)
+      {"location", location} = List.keyfind!(headers, "location", 0)
+      {:ok, location, [cookie | cookies]}
+    else
+      {:ok, response} -> {:error, {:post_login, response}}
+    end
+  end
+
+  defp get_unikey_code(location, cookies) do
+    req =
+      Finch.build(:get, @unikey_login_url_base <> location, [{"Cookie", Enum.join(cookies, "; ")}])
+
+    with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
+      {"location", redirect_location} = List.keyfind!(headers, "location", 0)
+      %URI{fragment: fragment} = URI.parse(redirect_location)
+      %URI{query: query} = URI.parse(fragment)
+      %{"code" => code} = URI.decode_query(query)
+      {:ok, code}
+    else
+      {:ok, response} -> {:error, {:get_unicode_key, response}}
+    end
+  end
+
+  defp post_jwt(code, code_verifier, cookies) do
+    req =
+      Finch.build(
+        :post,
+        @unikey_login_url_base <> "/connect/token",
+        [
+          {"Cookie", Enum.join(cookies, "; ")},
+          {"host", "identity.unikey.com"},
+          {"accept", "*/*"},
+          {"content-type", "application/x-www-form-urlencoded"}
+        ],
+        www_form_encode(%{
+          "client_id" => client_id(),
+          "client_secret" => client_secret(),
+          "code" => code,
+          "code_verifier" => code_verifier,
+          "grant_type" => "authorization_code",
+          "redirect_uri" => "https://mykevo.com/#/token"
+        })
+      )
+
+    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch) do
+      %{
+        "access_token" => access_token,
+        "id_token" => id_token,
+        "refresh_token" => refresh_token,
+        "expires_in" => expires_in
+      } = Jason.decode!(body) # this ain't json
+
+      %{"sub" => user_id} = JOSE.decode(id_token)
+
+      {:ok,
+       %Kevo.API.Auth{
+         :access_token => access_token,
+         :id_token => id_token,
+         :refresh_token => refresh_token,
+         :expires_in => expires_in,
+         :user_id => user_id
+       }}
+    else
+      {:ok, response} -> {:error, {:post_jwt, response}}
+    end
   end
 
   # API calls
@@ -372,10 +374,8 @@ defmodule Kevo.API do
 
   defp www_form_encode(map) do
     map
-    |> Enum.map(fn {k,v} -> k <> "=" <> v end)
+    |> Enum.map(fn {k, v} -> URI.encode_www_form(k) <> "=" <> URI.encode_www_form(v) end)
     |> Enum.join("&")
-    # |> Enum.map(fn {k,v} -> URI.encode_www_form(k) <> "=" <> URI.encode_www_form(v) end)
-    # |> Enum.join("&")
   end
 
   @spec generate_certificate(device_uuid4 :: String.t()) :: binary()
