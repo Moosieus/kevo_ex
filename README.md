@@ -3,6 +3,8 @@
 A client for Kevo's reverse engineered web API for Elixir, ported from [dcmeglio/pykevoplus](https://github.com/dcmeglio/pykevoplus).
 
 ## Todo
+- Find a decent way to REPL and test all of this without going nuts
+- Make sure we don't crash the calling process
 - Write a GenServer for communicating with the ASP.NET/JWT API
 - Create a behavior for users to bind event handlers to the websocket API
 

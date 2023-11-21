@@ -72,7 +72,7 @@ defmodule Kevo.API do
       password: password!(opts)
     }
 
-    GenServer.start_link(__MODULE__, config)
+    GenServer.start_link(__MODULE__, config, name: __MODULE__)
   end
 
   @impl true
@@ -255,7 +255,8 @@ defmodule Kevo.API do
         "expires_in" => expires_in
       } = Jason.decode!(body)
 
-      {:ok, %{"sub" => user_id}} = Joken.peek_claims(id_token) # stuck here
+      # stuck here
+      {:ok, %{"sub" => user_id}} = Joken.peek_claims(id_token)
 
       {:ok,
        %Kevo.API.Auth{
@@ -272,13 +273,21 @@ defmodule Kevo.API do
 
   # API calls
 
-  @impl true
-  def handle_call(:get_locks, _, %{user_id: user_id, access_token: access_token} = state) do
-    {:ok, locks} = get_locks(user_id, access_token)
-    {:reply, locks, state}
+  def get_locks() do
+    GenServer.call(Kevo.API, :get_locks)
   end
 
-  def get_locks(user_id, access_token) do
+  @impl true
+  def handle_call(:get_locks, _, %{user_id: user_id, access_token: access_token} = state) do
+    with {:ok, locks} <- do_get_locks(user_id, access_token) do
+      {:reply, locks, state}
+    else
+      err ->
+        {:reply, err, state}
+    end
+  end
+
+  def do_get_locks(user_id, access_token) do
     with {:ok, snonce} <- get_server_nonce() do
       headers = headers(access_token, snonce)
 
@@ -288,11 +297,14 @@ defmodule Kevo.API do
           @unikey_api_url_base <> "/api/v2/users/" <> user_id <> "/locks",
           headers
         )
-
-      {:ok, %Finch.Response{status: 200, body: body}} = Finch.request(req, KevoFinch)
-      %{"locks" => locks} = Jason.decode!(body)
-
-      {:ok, locks}
+        Logger.info([get_locks_request: req])
+      with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch) do
+        Logger.info([get_locks_body: body])
+        %{"locks" => locks} = Jason.decode!(body)
+        {:ok, locks}
+      else
+        {:ok, resp} -> {:error, resp}
+      end
     end
   end
 
@@ -414,9 +426,11 @@ defmodule Kevo.API do
         body
       )
 
-    with {:ok, %Finch.Response{status: 200, headers: headers}} <- Finch.request(req, KevoFinch) do
+    with {:ok, %Finch.Response{status: 201, headers: headers}} <- Finch.request(req, KevoFinch) do
       {"x-unikey-nonce", server_nonce} = List.keyfind(headers, "x-unikey-nonce", 0)
       {:ok, server_nonce}
+    else {:ok, resp} ->
+      {:error, resp}
     end
   end
 
