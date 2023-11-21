@@ -14,6 +14,7 @@ defmodule Kevo.Pkce do
   def code_verifier(length) do
     :crypto.strong_rand_bytes(length)
     |> Base.url_encode64()
+    |> binary_part(0, length)
   end
 
   def code_challenge(verifier) do

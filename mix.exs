@@ -25,7 +25,8 @@ defmodule Kevo.MixProject do
       {:finch, "~> 0.16"},
       {:uuid, "~> 1.1"},
       {:jason, "~> 1.4"},
-      {:jose, "~> 1.11"}
+      {:jose, "~> 1.11"},
+      {:html_entities, "~> 0.5"}
       # {:dep_from_hexpm, "~> 0.3.0"},
       # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]

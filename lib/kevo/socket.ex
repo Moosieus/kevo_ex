@@ -40,7 +40,7 @@ defmodule Kevo.Socket do
 
   # Generate the verification value used to connect to the websocket.
   defp ws_verification(client_nonce, server_nonce) do
-    :crypto.mac(:hmac, :sha512, Kevo.client_secret(), client_nonce <> server_nonce)
+    :crypto.mac(:hmac, :sha512, Kevo.API.client_secret(), client_nonce <> server_nonce)
   end
 
   defp client_nonce() do

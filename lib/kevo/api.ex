@@ -3,12 +3,19 @@ defmodule Kevo.API do
   Constants and functions for interacting with Kevo's API directly
   """
 
+  use GenServer
+  require Logger
+
   @unikey_login_url_base "https://identity.unikey.com"
   @unikey_invalid_login_url "https://identity.unikey.com/account/loginlocal"
   @unikey_api_url_base "https://resi-prd-api.unikey.com"
 
   def client_secret() do
     "YgA3ADAANgBjADkAZgAxAC0AYwBiAGMAOQAtADQAOAA5ADcALQA5ADMANABiAC0AMgBlAGYAZABmADYANQBjAGIAYgA2ADAA"
+  end
+
+  def client_nonce() do
+    Base.encode64(:crypto.strong_rand_bytes(64))
   end
 
   def client_id(), do: "cfced01c-f520-4a32-acac-7c6d2e0da80c"
@@ -44,7 +51,7 @@ defmodule Kevo.API do
       :access_token,
       :id_token,
       :refresh_token,
-      :expires_at,
+      :expires_in,
       :user_id
     ]
   end
@@ -54,76 +61,131 @@ defmodule Kevo.API do
       :access_token,
       :id_token,
       :refresh_token,
-      :expires_at
+      :expires_in
     ]
   end
 
-  def login(username, password) do
-    {code_challenge, code_verifier} = Kevo.Pkce.generate_pkce_pair()
+  @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
+  def start_link(opts) do
+    config = %{
+      username: username!(opts),
+      password: password!(opts)
+    }
 
-    with {:ok, login_page_location} <- get_login_url(code_challenge),
-         {:ok, login_form} <- get_login_page(login_page_location),
+    GenServer.start_link(__MODULE__, config)
+  end
+
+  @impl true
+  def init(%{username: username, password: password}) do
+    {:ok,
+     %Kevo.API.Auth{
+       :access_token => access_token,
+       :id_token => id_token,
+       :refresh_token => refresh_token,
+       :expires_in => expires_in,
+       :user_id => user_id
+     }} = login(username, password)
+
+    {:ok,
+     %{
+       username => username,
+       password => password,
+       :access_token => access_token,
+       :id_token => id_token,
+       :refresh_token => refresh_token,
+       :expires_at => expires_at(expires_in),
+       :user_id => user_id
+     }}
+  end
+
+  defp login(username, password) do
+    {code_challenge, code_verifier} = Kevo.Pkce.generate_pkce_pair()
+    device_id = UUID.uuid4()
+    auth_url = auth_url(code_challenge, device_id)
+
+    with {:ok, login_page_url} <- get_login_url(auth_url),
+         {:ok, login_form, cookies} <- get_login_page(login_page_url),
          {verification_token, serialized_client} <- scrape_login_form(login_form),
          {:ok, unikey_redirect_location} <-
-           post_login(username, password, serialized_client, verification_token),
+           post_login(username, password, cookies, serialized_client, verification_token),
          {:ok, code} <- get_unikey_code(unikey_redirect_location),
          {:ok, auth} <- post_jwt(code, code_verifier) do
-      auth
+      {:ok, auth}
+    else
+      error ->
+        Logger.error(msg: "login failed", reason: error)
+        error
     end
   end
 
   # Login sub-functions
 
-  defp get_login_url(code_challenge) do
-    device_id = UUID.uuid4()
-    req = Finch.build(:get, auth_url(code_challenge, device_id))
+  defp get_login_url(auth_url) do
+    req = Finch.build(:get, auth_url)
 
-    with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
-      {"Location", redirect_location} = List.keyfind!(headers, "Location", 0)
+    with {:ok, %Finch.Response{status: 302, headers: headers} = resp} <-
+           Finch.request(req, KevoFinch) do
+      {"location", redirect_location} = List.keyfind!(headers, "location", 0)
       {:ok, redirect_location}
+    else
+      {:ok, response} -> {:error, {:get_login_url, response}}
     end
   end
 
   defp get_login_page(url) do
     req = Finch.build(:get, url)
 
-    with {:ok, %Finch.Response{status: 200, body: login_form}} <- Finch.request(req, KevoFinch) do
-      {:ok, login_form}
+    with {:ok, %Finch.Response{status: 200, body: login_form, headers: headers}} <-
+           Finch.request(req, KevoFinch) do
+      {:ok, login_form, get_cookies(headers)}
+    else
+      {:ok, response} -> {:error, {:get_login_page, response}}
     end
   end
 
-  defp post_login(username, password, serialized_client, request_verification_token) do
+  defp post_login(username, password, cookies, serialized_client, verification_token) do
     req =
       Finch.build(
         :post,
         @unikey_login_url_base <> "#{}/account/login",
-        [],
-        Jason.encode!(%{
+        [
+          {"Cookie", Enum.join(cookies, "; ")},
+          {"host", "identity.unikey.com"},
+          {"accept", "*/*"},
+          {"content-type", "application/x-www-form-urlencoded"}
+        ],
+        www_form_encode(%{
           "SerializedClient" => serialized_client,
-          "NumFailedAttempts" => 0,
+          "NumFailedAttempts" => "0",
           "Username" => username,
           "Password" => password,
           "login" => "",
-          "__RequestVerificationToken" => request_verification_token
+          "__RequestVerificationToken" => verification_token
         })
       )
 
-    with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
-      {"Location", redirect_location} = List.keyfind(headers, "Location", 0)
+    IO.inspect(req, label: "Final Request")
 
-      case List.keyfind(headers, "Location", 0) do
-        # need to type/kind this
-        nil -> {:error, :invalid_login}
-        _ -> {:ok, redirect_location}
+    with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
+      case List.keyfind(headers, "location", 0) do
+        # need to type/kind this (what did I mean by this?)
+        {"location", redirect_location} ->
+          {:ok, redirect_location}
+
+        _ ->
+          {:error, :invalid_login}
       end
+    else
+      {:ok, response} -> {:error, {:post_login, response}}
     end
   end
 
   defp get_unikey_code(location) do
+    Logger.info(msg: "get_unikey_code", location: location)
     req = Finch.build(:get, @unikey_login_url_base <> location)
 
     with {:ok, %Finch.Response{status: 302, headers: headers}} <- Finch.request(req, KevoFinch) do
-      {"Location", redirect_location} = List.keyfind(headers, "Location", 0)
+      {"location", redirect_location} = List.keyfind(headers, "location", 0)
       %URI{fragment: fragment} = URI.parse(redirect_location)
       %URI{query: query} = URI.parse(fragment)
       %{"code" => code} = URI.decode_query(query)
@@ -155,8 +217,6 @@ defmodule Kevo.API do
         "expires_in" => expires_in
       } = Jason.decode!(body)
 
-      expires_at = expires_at(expires_in)
-
       %{"sub" => user_id} = JOSE.decode(id_token)
 
       {:ok,
@@ -164,32 +224,35 @@ defmodule Kevo.API do
          :access_token => access_token,
          :id_token => id_token,
          :refresh_token => refresh_token,
-         :expires_at => expires_at,
+         :expires_in => expires_in,
          :user_id => user_id
        }}
     end
   end
 
   defp auth_url(code_challenge, device_uuid4) do
-    certificate = generate_certificate(device_uuid4) |> Base.encode64()
+    certificate = generate_certificate(device_uuid4)
     client_id = client_id()
     state = :crypto.hash(:md5, :crypto.strong_rand_bytes(32))
 
     @unikey_login_url_base <>
-      "/connect/authorize/?" <>
-      URI.encode_query(%{
-        "client_id" => client_id,
-        "redirect_uri" => "https://mykevo.com/#/token",
-        "response_type" => "code",
-        "scope" => "openid email profile identity.api tumbler.api tumbler.ws offline_access",
-        "state" => state,
-        "code_challenge" => code_challenge,
-        "code_challenge_method" => "S256",
-        "prompt" => "login",
-        "response_mode" => "query",
-        "acr_values" =>
-          "\n    appId:#{client_id}\n    tenant:#{tenant_id()}\n    tenantCode:KWK\n    tenantClientId:#{client_id}\n    loginContext:Web\n    deviceType:Browser\n    deviceName:Chrome,(Windows)\n    deviceMake:Chrome,108.0.0.0\n    deviceModel:Windows,10\n    deviceVersion:rp-1.0.2\n    staticDeviceId:#{device_uuid4}\n    deviceCertificate:#{certificate}\n    isDark:false"
-      })
+      "/connect/authorize?" <>
+      URI.encode_query(
+        %{
+          "client_id" => client_id,
+          "redirect_uri" => "https://mykevo.com/#/token",
+          "response_type" => "code",
+          "scope" => "openid email profile identity.api tumbler.api tumbler.ws offline_access",
+          "state" => state,
+          "code_challenge" => code_challenge,
+          "code_challenge_method" => "S256",
+          "prompt" => "login",
+          "response_mode" => "query",
+          "acr_values" =>
+            "\n    appId:#{client_id}\n    tenant:#{tenant_id()}\n    tenantCode:KWK\n    tenantClientId:#{client_id}\n    loginContext:Web\n    deviceType:Browser\n    deviceName:Chrome,(Windows)\n    deviceMake:Chrome,108.0.0.0\n    deviceModel:Windows,10\n    deviceVersion:rp-1.0.2\n    staticDeviceId:#{device_uuid4}\n    deviceCertificate:#{certificate}\n    isDark:false"
+        },
+        :rfc3986
+      )
   end
 
   defp scrape_login_form(html) do
@@ -202,21 +265,37 @@ defmodule Kevo.API do
     %{"token" => serialized_client} =
       Regex.named_captures(~r/<input.* name="SerializedClient".* value="(?<token>.*)"/, html)
 
-    {request_verification_token, serialized_client}
+    {request_verification_token, HtmlEntities.decode(serialized_client)}
   end
 
   # API calls
 
-  def get_locks(access_token) do
-    with {:ok, snonce} <- get_server_nonce(),
-         headers <- headers(access_token, snonce) do
-      "foop #{headers}"
+  @impl true
+  def handle_call(:get_locks, _, %{user_id: user_id, access_token: access_token} = state) do
+    {:ok, locks} = get_locks(user_id, access_token)
+    {:reply, locks, state}
+  end
+
+  def get_locks(user_id, access_token) do
+    with {:ok, snonce} <- get_server_nonce() do
+      headers = headers(access_token, snonce)
+
+      req =
+        Finch.build(
+          :get,
+          @unikey_api_url_base <> "/api/v2/users/" <> user_id <> "/locks",
+          headers
+        )
+
+      {:ok, %Finch.Response{status: 200, body: body}} = Finch.request(req, KevoFinch)
+      %{"locks" => locks} = Jason.decode!(body)
+
+      {:ok, locks}
     end
   end
 
   # Doing Oauth 2.0
-  @spec request(request :: %Finch.Request{}, auth :: %Kevo.API.Auth{}) :: {:ok, %Finch.Response{}}
-  def request(request, %Kevo.API.Auth{
+  def request(request, %{
         access_token: access_token,
         refresh_token: refresh_token,
         expires_at: expires_at
@@ -263,7 +342,7 @@ defmodule Kevo.API do
          :access_token => access_token,
          :id_token => id_token,
          :refresh_token => refresh_token,
-         :expires_at => expires_at(expires_in)
+         :expires_in => expires_in
        }}
     end
   end
@@ -271,35 +350,54 @@ defmodule Kevo.API do
   # Helper Functions
 
   defp headers(access_token, server_nonce) do
-    %{
-      "X-unikey-cnonce" => Kevo.client_nonce(),
-      "X-unikey-context" => "Web",
-      "X-unikey-nonce" => server_nonce,
-      "Authorization" => "Bearer " <> access_token,
-      "Accept" => "application/json"
-    }
+    [
+      {"X-unikey-cnonce", Kevo.API.client_nonce()},
+      {"X-unikey-context", "Web"},
+      {"X-unikey-nonce", server_nonce},
+      {"Authorization", "Bearer " <> access_token},
+      {"Accept", "application/json"}
+    ]
   end
 
-  @spec generate_certificate(device_uuid4 :: binary()) :: binary()
+  defp get_cookies(headers) do
+    Enum.flat_map(headers, fn {header, content} ->
+      if header === "set-cookie" do
+        [cookie, _] = String.split(content, ";", parts: 2)
+        [cookie]
+      else
+        []
+      end
+    end)
+  end
+
+  defp www_form_encode(map) do
+    map
+    |> Enum.map(fn {k,v} -> k <> "=" <> v end)
+    |> Enum.join("&")
+    # |> Enum.map(fn {k,v} -> URI.encode_www_form(k) <> "=" <> URI.encode_www_form(v) end)
+    # |> Enum.join("&")
+  end
+
+  @spec generate_certificate(device_uuid4 :: String.t()) :: binary()
   def generate_certificate(device_uuid4) do
     e = DateTime.utc_now() |> DateTime.to_unix()
 
     Base.encode64(
       <<17, 1, 0, 1, 19, 1, 0, 1, 16, 1, 0, 48>> <>
-        length_encoded_byte(18, <<1::32-little>>) <>
-        length_encoded_byte(20, <<e::32-little>>) <>
-        length_encoded_byte(21, <<e::32-little>>) <>
-        length_encoded_byte(22, <<e + 86400::32-little>>) <>
+        length_encoded_bytes(18, <<1::32-little>>) <>
+        length_encoded_bytes(20, <<e::32-little>>) <>
+        length_encoded_bytes(21, <<e::32-little>>) <>
+        length_encoded_bytes(22, <<e + 86400::32-little>>) <>
         <<48, 1, 0, 6>> <>
-        length_encoded_byte(49, <<0::128>>) <>
-        length_encoded_byte(50, UUID.string_to_binary!(device_uuid4)) <>
-        length_encoded_byte(53, :crypto.strong_rand_bytes(32)) <>
-        length_encoded_byte(54, :crypto.strong_rand_bytes(32))
+        length_encoded_bytes(49, <<0::128>>) <>
+        length_encoded_bytes(50, uuid_to_binary(device_uuid4)) <>
+        length_encoded_bytes(53, :crypto.strong_rand_bytes(32)) <>
+        length_encoded_bytes(54, :crypto.strong_rand_bytes(32))
     )
   end
 
-  defp length_encoded_byte(val, data) do
-    <<val::8, byte_size(data)::16, data::bytes>>
+  defp length_encoded_bytes(val, data) do
+    <<val::8, byte_size(data)::16-little, data::bytes>>
   end
 
   def get_server_nonce() do
@@ -328,8 +426,38 @@ defmodule Kevo.API do
 
   # adds expires_in to utc timestamp
   defp expires_at(expires_in) do
-    DateTime.utc_now()
-    |> DateTime.to_unix()
-    |> DateTime.add(expires_in)
+    DateTime.to_unix(DateTime.utc_now()) + expires_in
+  end
+
+  # has to be like this for some reason
+  defp uuid_to_binary(device_uuid) do
+    [i, ii | rest] =
+      device_uuid
+      |> String.split("-")
+      |> Enum.reverse()
+      |> Enum.map(fn x -> :binary.decode_hex(x) end)
+
+    [fast_bin_reverse(i), fast_bin_reverse(ii) | rest]
+    |> IO.iodata_to_binary()
+  end
+
+  defp fast_bin_reverse(bin) do
+    bin
+    |> :binary.decode_unsigned(:little)
+    |> :binary.encode_unsigned(:big)
+  end
+
+  # Configuration Functions
+
+  defp username!(opts) do
+    Keyword.get(opts, :username) || raise(ArgumentError, "must supply a username")
+  end
+
+  defp password!(opts) do
+    Keyword.get(opts, :password) || raise(ArgumentError, "must supply a password")
+  end
+
+  defp finch!(opts) do
+    Keyword.get(opts, :finch) || raise(ArgumentError, "must supply an instance of finch")
   end
 end

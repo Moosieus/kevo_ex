@@ -20,7 +20,7 @@ defmodule Kevo.Supervisor do
 
     children = [
       {Finch, name: finch_name},
-      {Kevo, finch: finch_name}
+      {Kevo.API, finch: finch_name}
     ]
 
     Supervisor.init(children, strategy: :one_for_one)

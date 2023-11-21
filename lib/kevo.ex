@@ -1,9 +1,5 @@
 defmodule Kevo do
-  def client_secret() do
-    "YgA3ADAANgBjADkAZgAxAC0AYwBiAGMAOQAtADQAOAA5ADcALQA5ADMANABiAC0AMgBlAGYAZABmADYANQBjAGIAYgA2ADAA"
-  end
-
-  def client_nonce() do
-    Base.encode64(:crypto.strong_rand_bytes(64))
+  def get_locks(timeout \\ 5000) do
+    GenServer.call(Kevo.API, :get_locks, timeout)
   end
 end
