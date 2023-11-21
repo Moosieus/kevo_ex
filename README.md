@@ -3,7 +3,7 @@
 A client for Kevo's reverse engineered web API for Elixir, ported from [dcmeglio/pykevoplus](https://github.com/dcmeglio/pykevoplus).
 
 ## Todo
-- Wrap the REST client in a GenServer to handle authentication and refresh tokens
+- Write a GenServer for communicating with the ASP.NET/JWT API
 - Create a behavior for users to bind event handlers to the websocket API
 
 ## Installation

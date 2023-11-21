@@ -253,9 +253,9 @@ defmodule Kevo.API do
         "id_token" => id_token,
         "refresh_token" => refresh_token,
         "expires_in" => expires_in
-      } = Jason.decode!(body) # this ain't json
+      } = Jason.decode!(body)
 
-      %{"sub" => user_id} = JOSE.decode(id_token)
+      %{"sub" => user_id} = JOSE.decode(id_token) # stuck here
 
       {:ok,
        %Kevo.API.Auth{
