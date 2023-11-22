@@ -10,7 +10,7 @@ defmodule Kevo.Supervisor do
   end
 
   @impl true
-  def init(config) do
+  def init(_config) do
 
     # initialize Finch (use spec if given, otherwise default)
     # call "/login"

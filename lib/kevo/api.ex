@@ -1,3 +1,44 @@
+defmodule Kevo.API.RefreshTokenError do
+  defexception [:response]
+
+  def message(%{response: %Finch.Response{status: status}}) do
+    "expected response status 200, got: #{status}"
+  end
+end
+
+defmodule Kevo.API.GetServerNonceError do
+  defexception [:response]
+
+  def message(%{response: %Finch.Response{status: status}}) do
+    "expected response status 201, got: #{status}"
+  end
+end
+
+# There's probably a lot better way to manage errors. This will suffice for now.
+defmodule Kevo.API.GetLocksError do
+  defexception [:request, :response, :network_error, :decode_error]
+
+  def message(%{network_error: %Finch.Error{} = err}) do
+    "get locks request failed to send: #{Finch.Error.message(err)}"
+  end
+
+  def message(%{response: %Finch.Response{status: status}}) do
+    "expected response status 200, got: #{status}"
+  end
+
+  def message(%{decode_error: %Jason.DecodeError{} = err}) do
+    "couldn't decode response body: #{Jason.DecodeError.message(err)}"
+  end
+end
+
+defmodule Kevo.API.GetLockEventsError do
+  defexception [:request, :response, :network_error, :decode_error]
+
+  def message(%{response: %Finch.Response{status: status}}) do
+    "expected response status 200, got: #{status}"
+  end
+end
+
 defmodule Kevo.API do
   @moduledoc """
   A GenServer that wraps the busy-work of authenticating and querying Kevo's special brand of OIDC.
@@ -5,6 +46,8 @@ defmodule Kevo.API do
 
   use GenServer
   require Logger
+
+  alias Kevo.API.{RefreshTokenError, GetServerNonceError, GetLocksError, GetLockEventsError}
 
   @unikey_login_url_base "https://identity.unikey.com"
   @unikey_invalid_login_url "https://identity.unikey.com/account/loginlocal"
@@ -272,13 +315,36 @@ defmodule Kevo.API do
 
   ## API
 
+  @doc """
+  Retrieves all locks visible to the logged in user.
+  """
   def get_locks() do
     GenServer.call(Kevo.API, :get_locks)
+  end
+
+  @doc """
+  Retrieves the lock's state.
+  """
+  def get_lock(lock_id) do
+    GenServer.call(Kevo.API, {:get_lock, lock_id})
   end
 
   def lock(lock_id) do
     GenServer.call(Kevo.API, {:lock, lock_id})
   end
+
+  @doc """
+  Get events for the lock. Follows the frontend's paging behavior.
+  """
+  def get_events(lock_id, page \\ 1, page_size \\ 10) do
+    GenServer.call(Kevo.API, {:get_events, lock_id, page, page_size})
+  end
+
+  def unlock(lock_id) do
+    GenServer.call(Kevo.API, {:unlock, lock_id})
+  end
+
+  ## Callbacks
 
   @impl true
   def handle_call(:get_locks, _, %{user_id: user_id, access_token: access_token} = state) do
@@ -287,6 +353,36 @@ defmodule Kevo.API do
          {:ok, snonce} <- get_server_nonce(),
          {:ok, locks} <- do_get_locks(user_id, headers(access_token, snonce)) do
       {:reply, {:ok, locks}, state}
+    else
+      err ->
+        {:reply, err, state}
+    end
+  end
+
+  @impl true
+  def handle_call({:get_lock, lock_id}, _, %{access_token: access_token} = state) do
+    # add a function call here to refresh if necessary (within 100 seconds of expiry)
+    with {:ok, state} <- check_refresh(state),
+         {:ok, snonce} <- get_server_nonce(),
+         {:ok, lock} <- do_get_lock(lock_id, headers(access_token, snonce)) do
+      {:reply, {:ok, lock}, state}
+    else
+      err ->
+        {:reply, err, state}
+    end
+  end
+
+  @impl true
+  def handle_call(
+        {:get_events, lock_id, page, page_size},
+        _,
+        %{access_token: access_token} = state
+      ) do
+    # add a function call here to refresh if necessary (within 100 seconds of expiry)
+    with {:ok, state} <- check_refresh(state),
+         {:ok, snonce} <- get_server_nonce(),
+         {:ok, events} <- do_get_events(lock_id, page, page_size, headers(access_token, snonce)) do
+      {:reply, {:ok, events}, state}
     else
       err ->
         {:reply, err, state}
@@ -319,6 +415,26 @@ defmodule Kevo.API do
     end
   end
 
+  ## REST API Calls
+
+  defp do_get_lock(lock_id, headers) do
+    req =
+      Finch.build(
+        :get,
+        @unikey_api_url_base <> "/api/v2/locks/" <> lock_id,
+        headers
+      )
+
+    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch) do
+      case Jason.decode(body) do
+        {:ok, lock} -> {:ok, lock}
+        {:error, err} -> {:error, err}
+      end
+    else
+      {:ok, response} -> {:error, %GetLocksError{response: response}}
+    end
+  end
+
   defp do_get_locks(user_id, headers) do
     req =
       Finch.build(
@@ -331,43 +447,70 @@ defmodule Kevo.API do
          {:ok, %{"locks" => locks}} <- Jason.decode(body) do
       {:ok, locks}
     else
-      {:ok, response} -> {:error, response}
+      {:ok, response} -> {:error, %GetLocksError{response: response}}
     end
   end
 
-  defp send_command(user_id, lock_id, command, headers) do
+  defp do_get_events(lock_id, page, page_size, headers) do
     req =
       Finch.build(
         :get,
         @unikey_api_url_base <>
-          "/api/v2/users/" <> user_id <> "/locks/" <> lock_id <> "/commands",
-        headers,
-        Jason.encode!(%{"command" => command})
+          "/api/v2/locks/" <> lock_id <> "/events?page=#{page}&pageSize=#{page_size}",
+        headers
       )
 
-    with {:ok, %Finch.Response{status: 200}} <- Finch.request(req, KevoFinch) do
+    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch),
+         {:ok, events} <- Jason.decode(body) do
+      {:ok, events}
+    else
+      {:ok, %Finch.Response{} = response} -> {:error, %GetLockEventsError{response: response}}
+      {:error, %Finch.Error{} = err} -> {:error, %GetLockEventsError{network_error: err}}
+      {:error, %Jason.DecodeError{} = err} -> {:error, %GetLockEventsError{decode_error: err}}
+    end
+  end
+
+  defp send_command(user_id, lock_id, command, headers) do
+    body = Jason.encode!(%{"command" => command})
+
+    headers = [
+      {"Content-Type", "application/json"},
+      {"Content-Length", "#{byte_size(body)}"} | headers
+    ]
+
+    req =
+      Finch.build(
+        :post,
+        @unikey_api_url_base <>
+          "/api/v2/users/" <> user_id <> "/locks/" <> lock_id <> "/commands",
+        headers,
+        body
+      )
+
+    with {:ok, %Finch.Response{status: 201}} <- Finch.request(req, KevoFinch) do
       :ok
     else
       {:ok, response} -> {:error, response}
     end
   end
 
+  # Checks if a new refresh token is needed and obtains it if needed.
   defp check_refresh(%{refresh_token: refresh_token, expires_at: expire_time} = state) do
     if expire_time < DateTime.to_unix(DateTime.utc_now()) + 100 do
-      {:ok, state}
-    else
-      with {:ok, %Refresh{} = refresh} <- post_refresh(refresh_token) do
+      with {:ok, %Refresh{} = refresh} <- do_refresh(refresh_token) do
         state
         |> Map.put(:access_token, refresh.access_token)
         |> Map.put(:id_token, refresh.id_token)
         |> Map.put(:refresh_token, refresh.refresh_token)
         |> Map.put(:expires_at, refresh.expires_at)
       end
+    else
+      {:ok, state}
     end
   end
 
-  # need to reauthenticate on expired refresh tokens
-  def post_refresh(refresh_token) do
+  # Obtains a new refresh token.
+  defp do_refresh(refresh_token) do
     req =
       Finch.build(
         :post,
@@ -398,11 +541,11 @@ defmodule Kevo.API do
        }}
     else
       {:ok, response} ->
-        {:error, response}
+        {:error, %RefreshTokenError{response: response}}
     end
   end
 
-  # Helper Functions
+  ## Helpers
 
   defp headers(access_token, server_nonce) do
     [
@@ -472,7 +615,7 @@ defmodule Kevo.API do
       {:ok, server_nonce}
     else
       {:ok, response} ->
-        {:error, response}
+        {:error, %GetServerNonceError{response: response}}
     end
   end
 
@@ -503,7 +646,7 @@ defmodule Kevo.API do
     |> :binary.encode_unsigned(:big)
   end
 
-  # Configuration Functions
+  ## Config helpers
 
   defp username!(opts) do
     Keyword.get(opts, :username) || raise(ArgumentError, "must supply a username")
@@ -513,7 +656,7 @@ defmodule Kevo.API do
     Keyword.get(opts, :password) || raise(ArgumentError, "must supply a password")
   end
 
-  defp finch!(opts) do
-    Keyword.get(opts, :finch) || raise(ArgumentError, "must supply an instance of finch")
-  end
+  # defp finch!(opts) do
+  #   Keyword.get(opts, :finch) || raise(ArgumentError, "must supply an instance of finch")
+  # end
 end
