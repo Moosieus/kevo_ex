@@ -1,6 +1,6 @@
 defmodule Kevo.API do
   @moduledoc """
-  Constants and functions for interacting with Kevo's API directly
+  A GenServer that wraps the busy-work of authenticating and querying Kevo's special brand of OIDC.
   """
 
   use GenServer
@@ -51,7 +51,7 @@ defmodule Kevo.API do
       :access_token,
       :id_token,
       :refresh_token,
-      :expires_in,
+      :expires_at,
       :user_id
     ]
   end
@@ -61,7 +61,7 @@ defmodule Kevo.API do
       :access_token,
       :id_token,
       :refresh_token,
-      :expires_in
+      :expires_at
     ]
   end
 
@@ -78,11 +78,11 @@ defmodule Kevo.API do
   @impl true
   def init(%{username: username, password: password}) do
     {:ok,
-     %Kevo.API.Auth{
+     %Auth{
        :access_token => access_token,
        :id_token => id_token,
        :refresh_token => refresh_token,
-       :expires_in => expires_in,
+       :expires_at => expires_at,
        :user_id => user_id
      }} = login(username, password)
 
@@ -93,7 +93,7 @@ defmodule Kevo.API do
        :access_token => access_token,
        :id_token => id_token,
        :refresh_token => refresh_token,
-       :expires_at => expires_at(expires_in),
+       :expires_at => expires_at,
        :user_id => user_id
      }}
   end
@@ -148,7 +148,7 @@ defmodule Kevo.API do
   defp get_login_url(auth_url) do
     req = Finch.build(:get, auth_url)
 
-    with {:ok, %Finch.Response{status: 302, headers: headers} = resp} <-
+    with {:ok, %Finch.Response{status: 302, headers: headers}} <-
            Finch.request(req, KevoFinch) do
       {"location", redirect_location} = List.keyfind!(headers, "location", 0)
       {:ok, redirect_location}
@@ -255,15 +255,14 @@ defmodule Kevo.API do
         "expires_in" => expires_in
       } = Jason.decode!(body)
 
-      # stuck here
       {:ok, %{"sub" => user_id}} = Joken.peek_claims(id_token)
 
       {:ok,
-       %Kevo.API.Auth{
+       %Auth{
          :access_token => access_token,
          :id_token => id_token,
          :refresh_token => refresh_token,
-         :expires_in => expires_in,
+         :expires_at => expiration_timestamp(expires_in),
          :user_id => user_id
        }}
     else
@@ -271,61 +270,100 @@ defmodule Kevo.API do
     end
   end
 
-  # API calls
+  ## API
 
   def get_locks() do
     GenServer.call(Kevo.API, :get_locks)
   end
 
+  def lock(lock_id) do
+    GenServer.call(Kevo.API, {:lock, lock_id})
+  end
+
   @impl true
   def handle_call(:get_locks, _, %{user_id: user_id, access_token: access_token} = state) do
-    with {:ok, locks} <- do_get_locks(user_id, access_token) do
-      {:reply, locks, state}
+    # add a function call here to refresh if necessary (within 100 seconds of expiry)
+    with {:ok, state} <- check_refresh(state),
+         {:ok, snonce} <- get_server_nonce(),
+         {:ok, locks} <- do_get_locks(user_id, headers(access_token, snonce)) do
+      {:reply, {:ok, locks}, state}
     else
       err ->
         {:reply, err, state}
     end
   end
 
-  def do_get_locks(user_id, access_token) do
-    with {:ok, snonce} <- get_server_nonce() do
-      headers = headers(access_token, snonce)
-
-      req =
-        Finch.build(
-          :get,
-          @unikey_api_url_base <> "/api/v2/users/" <> user_id <> "/locks",
-          headers
-        )
-        Logger.info([get_locks_request: req])
-      with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch) do
-        Logger.info([get_locks_body: body])
-        %{"locks" => locks} = Jason.decode!(body)
-        {:ok, locks}
-      else
-        {:ok, resp} -> {:error, resp}
-      end
+  @impl true
+  def handle_call({:lock, lock_id}, _, %{user_id: user_id, access_token: access_token} = state) do
+    # add a function call here to refresh if necessary (within 100 seconds of expiry)
+    with {:ok, state} <- check_refresh(state),
+         {:ok, snonce} <- get_server_nonce(),
+         :ok <- send_command(user_id, lock_id, lock_state_lock(), headers(access_token, snonce)) do
+      {:reply, :ok, state}
+    else
+      err ->
+        {:reply, err, state}
     end
   end
 
-  # Doing Oauth 2.0
-  def request(request, %{
-        access_token: access_token,
-        refresh_token: refresh_token,
-        expires_at: expires_at
-      }) do
-    case expires_at < unix_now() + 100 do
-      true ->
-        "foo"
-
-      false ->
-        # hard stop here: Need to encapsulate this stuff into a GenServer to wrap the authentication state.
-        with {:ok, refresh} <- post_refresh(refresh_token) do
-          "bar"
-        end
+  @impl true
+  def handle_call({:unlock, lock_id}, _, %{user_id: user_id, access_token: access_token} = state) do
+    # add a function call here to refresh if necessary (within 100 seconds of expiry)
+    with {:ok, state} <- check_refresh(state),
+         {:ok, snonce} <- get_server_nonce(),
+         :ok <- send_command(user_id, lock_id, lock_state_unlock(), headers(access_token, snonce)) do
+      {:reply, :ok, state}
+    else
+      err ->
+        {:reply, err, state}
     end
+  end
 
-    headers = headers(access_token, Kevo.API.get_server_nonce())
+  defp do_get_locks(user_id, headers) do
+    req =
+      Finch.build(
+        :get,
+        @unikey_api_url_base <> "/api/v2/users/" <> user_id <> "/locks",
+        headers
+      )
+
+    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch),
+         {:ok, %{"locks" => locks}} <- Jason.decode(body) do
+      {:ok, locks}
+    else
+      {:ok, response} -> {:error, response}
+    end
+  end
+
+  defp send_command(user_id, lock_id, command, headers) do
+    req =
+      Finch.build(
+        :get,
+        @unikey_api_url_base <>
+          "/api/v2/users/" <> user_id <> "/locks/" <> lock_id <> "/commands",
+        headers,
+        Jason.encode!(%{"command" => command})
+      )
+
+    with {:ok, %Finch.Response{status: 200}} <- Finch.request(req, KevoFinch) do
+      :ok
+    else
+      {:ok, response} -> {:error, response}
+    end
+  end
+
+  defp check_refresh(%{refresh_token: refresh_token, expires_at: expire_time} = state) do
+    if expire_time < DateTime.to_unix(DateTime.utc_now()) + 100 do
+      {:ok, state}
+    else
+      with {:ok, %Refresh{} = refresh} <- post_refresh(refresh_token) do
+        state
+        |> Map.put(:access_token, refresh.access_token)
+        |> Map.put(:id_token, refresh.id_token)
+        |> Map.put(:refresh_token, refresh.refresh_token)
+        |> Map.put(:expires_at, refresh.expires_at)
+      end
+    end
   end
 
   # need to reauthenticate on expired refresh tokens
@@ -352,12 +390,15 @@ defmodule Kevo.API do
       } = Jason.decode!(body)
 
       {:ok,
-       %Kevo.API.Refresh{
+       %Refresh{
          :access_token => access_token,
          :id_token => id_token,
          :refresh_token => refresh_token,
-         :expires_in => expires_in
+         :expires_at => expiration_timestamp(expires_in)
        }}
+    else
+      {:ok, response} ->
+        {:error, response}
     end
   end
 
@@ -365,7 +406,7 @@ defmodule Kevo.API do
 
   defp headers(access_token, server_nonce) do
     [
-      {"X-unikey-cnonce", Kevo.API.client_nonce()},
+      {"X-unikey-cnonce", client_nonce()},
       {"X-unikey-context", "Web"},
       {"X-unikey-nonce", server_nonce},
       {"Authorization", "Bearer " <> access_token},
@@ -392,7 +433,7 @@ defmodule Kevo.API do
 
   @spec generate_certificate(device_uuid4 :: String.t()) :: binary()
   def generate_certificate(device_uuid4) do
-    e = DateTime.utc_now() |> DateTime.to_unix()
+    e = unix_now()
 
     Base.encode64(
       <<17, 1, 0, 1, 19, 1, 0, 1, 16, 1, 0, 48>> <>
@@ -429,8 +470,9 @@ defmodule Kevo.API do
     with {:ok, %Finch.Response{status: 201, headers: headers}} <- Finch.request(req, KevoFinch) do
       {"x-unikey-nonce", server_nonce} = List.keyfind(headers, "x-unikey-nonce", 0)
       {:ok, server_nonce}
-    else {:ok, resp} ->
-      {:error, resp}
+    else
+      {:ok, response} ->
+        {:error, response}
     end
   end
 
@@ -439,8 +481,8 @@ defmodule Kevo.API do
   end
 
   # adds expires_in to utc timestamp
-  defp expires_at(expires_in) do
-    DateTime.to_unix(DateTime.utc_now()) + expires_in
+  defp expiration_timestamp(expires_in) do
+    unix_now() + expires_in
   end
 
   # has to be like this for some reason
