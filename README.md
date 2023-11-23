@@ -1,9 +1,7 @@
-# Kevo
-
-A client for Kevo's reverse engineered web API for Elixir, roughly ported from [dcmeglio/pykevoplus](https://github.com/dcmeglio/pykevoplus).
+# kevo_ex (🚧 Work in progress 🚧)
+A client for Kevo's reverse engineered web API, for Elixir. Roughly ported from [dcmeglio/pykevoplus](https://github.com/dcmeglio/pykevoplus).
 
 ## Installation
-
 This package is heavily WIP and isn't yet available on hexdocs.
 
 <!--

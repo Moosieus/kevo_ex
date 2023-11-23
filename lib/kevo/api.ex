@@ -53,16 +53,16 @@ defmodule Kevo.API do
   @unikey_invalid_login_url "https://identity.unikey.com/account/loginlocal"
   @unikey_api_url_base "https://resi-prd-api.unikey.com"
 
+  # Kevo uses ODIC but doesn't depend on `client_secret` for security purposes - It's the same for all clients.
+  # In essence, `client_id`, `tenant_id` and `client_secret` are here for standards/ceremony sake.
+  # Seriously. Open your network inspector, toggle persist logs, and see for yourself!
+  def client_id(), do: "cfced01c-f520-4a32-acac-7c6d2e0da80c"
+
+  def tenant_id(), do: "d2e2d217-61ff-4ac2-98d9-2aedc90ac044"
+
   def client_secret() do
     "YgA3ADAANgBjADkAZgAxAC0AYwBiAGMAOQAtADQAOAA5ADcALQA5ADMANABiAC0AMgBlAGYAZABmADYANQBjAGIAYgA2ADAA"
   end
-
-  def client_nonce() do
-    Base.encode64(:crypto.strong_rand_bytes(64))
-  end
-
-  def client_id(), do: "cfced01c-f520-4a32-acac-7c6d2e0da80c"
-  def tenant_id(), do: "d2e2d217-61ff-4ac2-98d9-2aedc90ac044"
 
   def lock_state_lock(), do: 1
   def lock_state_unlock(), do: 2
@@ -594,6 +594,10 @@ defmodule Kevo.API do
 
   defp length_encoded_bytes(val, data) do
     <<val::8, byte_size(data)::16-little, data::bytes>>
+  end
+
+  def client_nonce() do
+    Base.encode64(:crypto.strong_rand_bytes(64))
   end
 
   def get_server_nonce() do

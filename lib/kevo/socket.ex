@@ -1,4 +1,7 @@
 defmodule Kevo.Socket do
+  @moduledoc """
+  🚧 Work in progress 🚧
+  """
   use WebSockex
 
   @unikey_ws_url_base "wss://resi-prd-ws.unikey.com"
