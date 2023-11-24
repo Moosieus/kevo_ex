@@ -161,7 +161,7 @@ defmodule Kevo.API do
     req = Finch.build(:get, auth_url)
 
     case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 303, headers: headers}} ->
+      {:ok, %Finch.Response{status: 302, headers: headers}} ->
         {"location", redirect_location} = List.keyfind!(headers, "location", 0)
         {:ok, redirect_location}
 
