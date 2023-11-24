@@ -10,10 +10,13 @@ Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikel
 - Document everything
 - Write tests (will need mocking)
 - Struct-type the responses or provide documented examples
-- Include credo
+- Properly type the errors in `Kevo.API`
+- Maybe rename `Kevo.API` to `Kevo.Api`
 - Consider if `login` should be called when initializing `Kevo.API`
   - Argument in favor: Fail in pre-flight vs in-air
   - Argument against: Blocking initialization
+
+*Presently using Finch for the API but may switch entirely to `:gun`...*
 
 ## Installation
 `kevo_ex` is a work in progress and isn't yet available on hex.

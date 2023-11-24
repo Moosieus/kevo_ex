@@ -1,9 +1,9 @@
 defmodule Kevo.Supervisor do
+  @moduledoc """
+  Root supervisor for all the processes required to communicate with Kevo.
+  """
   use Supervisor
 
-  @doc """
-
-  """
   @spec start_link(config :: keyword()) :: Supervisor.on_start()
   def start_link(config) do
     Supervisor.start_link(__MODULE__, config)
@@ -11,16 +11,19 @@ defmodule Kevo.Supervisor do
 
   @impl true
   def init(_config) do
+    gun_login_client = %{
+      id: Kevo.Gun.Login,
+      start: {:gun, :start_link, [self(), ~c"identity.unikey.com", 443, %{transport: :tls}]}
+    }
 
-    # initialize Finch (use spec if given, otherwise default)
-    # call "/login"
-    # initialize the Websocket
-
-    finch_name = KevoFinch
+    gun_api_client = %{
+      id: Kevo.Gun.API,
+      start: {:gun, :start_link, [self(), ~c"resi-prd-api.unikey.com", 443, %{transport: :tls}]}
+    }
 
     children = [
-      {Finch, name: finch_name},
-      {Kevo.API, finch: finch_name}
+      gun_login_client,
+      gun_api_client
     ]
 
     Supervisor.init(children, strategy: :one_for_one)

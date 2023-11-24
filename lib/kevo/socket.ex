@@ -2,7 +2,6 @@ defmodule Kevo.Socket do
   @moduledoc """
   🚧 Work in progress 🚧
   """
-  use WebSockex
 
   @unikey_ws_url_base "wss://resi-prd-ws.unikey.com"
   @user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
@@ -13,13 +12,6 @@ defmodule Kevo.Socket do
       server_nonce: server_nonce,
       user_id: user_id
     }
-
-    WebSockex.start_link(
-      ws_url(auth_token, server_nonce, user_id),
-      __MODULE__,
-      state,
-      extra_headers: [{"User-Agent", @user_agent}]
-    )
   end
 
   # need to call "/login" to get access token
