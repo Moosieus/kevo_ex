@@ -11,11 +11,6 @@ defmodule Kevo.API do
     GetServerNonceError,
     GetLocksError,
     GetLockEventsError,
-    GetLoginUrlError,
-    GetLoginPageError,
-    SubmitLoginError,
-    GetUnikeyCodeError,
-    PostJWTError,
     LoginError
   }
 
@@ -99,25 +94,21 @@ defmodule Kevo.API do
 
   @impl true
   def init(%{username: username, password: password}) do
-    {:ok,
-     %Auth{
-       :access_token => access_token,
-       :id_token => id_token,
-       :refresh_token => refresh_token,
-       :expires_at => expires_at,
-       :user_id => user_id
-     }} = login(username, password)
 
-    {:ok,
-     %{
-       username => username,
-       password => password,
-       :access_token => access_token,
-       :id_token => id_token,
-       :refresh_token => refresh_token,
-       :expires_at => expires_at,
-       :user_id => user_id
-     }}
+    case login(username, password) do
+      {:ok, %Auth{} = auth} ->
+        {:ok,
+         %{
+           username => username,
+           password => password,
+           :access_token => auth.access_token,
+           :id_token => auth.id_token,
+           :refresh_token => auth.refresh_token,
+           :expires_at => auth.expires_at,
+           :user_id => auth.user_id
+         }}
+      err -> {:stop, err}
+    end
   end
 
   defp login(username, password) do
@@ -135,7 +126,7 @@ defmodule Kevo.API do
       {:ok, auth}
     else
       {:error, error} ->
-        {:error, %LoginError{error: error}}
+        {:error, error}
     end
   end
 
@@ -170,16 +161,15 @@ defmodule Kevo.API do
     req = Finch.build(:get, auth_url)
 
     case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 302, headers: headers}} ->
+      {:ok, %Finch.Response{status: 303, headers: headers}} ->
         {"location", redirect_location} = List.keyfind!(headers, "location", 0)
         {:ok, redirect_location}
 
-      {:ok, resp} ->
-        {:error,
-         %LoginError{step: :get_login_url, request: req, response: resp, expected_status: 302}}
+      {:ok, %Finch.Response{} = resp} ->
+        {:error, LoginError.from_status(__ENV__.function, req, resp, 302)}
 
       {:error, %Finch.Error{} = err} ->
-        {:error, %LoginError{step: :get_login_url, request: req, error: err}}
+        {:error, LoginError.from_network(__ENV__.function, req, err)}
     end
   end
 
@@ -190,14 +180,15 @@ defmodule Kevo.API do
       {:ok, %Finch.Response{status: 200, body: login_form, headers: headers}} ->
         {:ok, login_form, get_cookies(headers)}
 
-      {:ok, response} ->
-        {:error, %GetLoginPageError{request: req, response: response}}
+      {:ok, %Finch.Response{} = resp} ->
+        {:error, LoginError.from_status(__ENV__.function, req, resp, 200)}
 
-      {:error, err} ->
-        {:error, %GetLoginPageError{request: req, network_error: err}}
+      {:error, %Finch.Error{} = err} ->
+        {:error, LoginError.from_network(__ENV__.function, req, err)}
     end
   end
 
+  # need to check the contents of the file here are as expected.
   defp scrape_login_form(html) do
     %{"token" => request_verification_token} =
       Regex.named_captures(
@@ -238,11 +229,11 @@ defmodule Kevo.API do
         {"location", location} = List.keyfind!(headers, "location", 0)
         {:ok, location, [cookie | cookies]}
 
-      {:ok, response} ->
-        {:error, %SubmitLoginError{request: req, response: response}}
+      {:ok, %Finch.Response{} = resp} ->
+        {:error, LoginError.from_status(__ENV__.function, req, resp, 302)}
 
-      {:error, err} ->
-        {:error, %SubmitLoginError{request: req, network_error: err}}
+      {:error, %Finch.Error{} = err} ->
+        {:error, LoginError.from_network(__ENV__.function, req, err)}
     end
   end
 
@@ -260,11 +251,11 @@ defmodule Kevo.API do
         %{"code" => code} = URI.decode_query(query)
         {:ok, code}
 
-      {:ok, response} ->
-        {:error, %GetUnikeyCodeError{request: req, response: response}}
+      {:ok, %Finch.Response{} = resp} ->
+        {:error, LoginError.from_status(__ENV__.function, req, resp, 302)}
 
-      {:error, err} ->
-        {:error, %GetUnikeyCodeError{request: req, network_error: err}}
+      {:error, %Finch.Error{} = err} ->
+        {:error, LoginError.from_network(__ENV__.function, req, err)}
     end
   end
 
@@ -302,11 +293,14 @@ defmodule Kevo.API do
          :user_id => user_id
        }}
     else
-      {:ok, response} ->
-        {:error, %PostJWTError{request: req, response: response}}
+      {:ok, %Finch.Response{} = resp} ->
+        {:error, LoginError.from_status(__ENV__.function, req, resp, 200)}
 
-      {:error, err} ->
-        {:error, %PostJWTError{request: req, network_error: err}}
+      {:error, %Jason.DecodeError{} = err} ->
+        {:error, %LoginError{request: req, network_error: err}}
+
+      {:error, %Finch.Error{} = err} ->
+        {:error, LoginError.from_network(__ENV__.function, req, err)}
     end
   end
 
