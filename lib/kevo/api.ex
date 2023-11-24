@@ -297,7 +297,7 @@ defmodule Kevo.API do
         {:error, LoginError.from_status(__ENV__.function, req, resp, 200)}
 
       {:error, %Jason.DecodeError{} = err} ->
-        {:error, %LoginError{request: req, network_error: err}}
+        {:error, LoginError.from_json(__ENV__.function, req, err)}
 
       {:error, %Finch.Error{} = err} ->
         {:error, LoginError.from_network(__ENV__.function, req, err)}

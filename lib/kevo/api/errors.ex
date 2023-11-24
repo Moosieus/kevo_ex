@@ -4,8 +4,12 @@ defmodule Kevo.API.LoginError do
   alias Kevo.API.LoginError
   defexception [:step, :request, :response, :expected_status, :network_error, :decode_error]
 
-  def message(%{step: {name, arity}, request: _, network_error: %Finch.Error{} = err}) do
+  def message(%{step: {name, arity}, network_error: %Finch.Error{} = err}) do
     "#{name}/#{arity}: unexpected network error: #{Finch.Error.message(err)}"
+  end
+
+  def message(%{step: {name, arity}, decode_error: %Jason.DecodeError{} = err}) do
+    "#{name}/#{arity}: could not decode json response: #{Jason.DecodeError.message(err)}"
   end
 
   def message(%{step: {name, arity}, response: %Finch.Response{status: got}, expected_status: expected}) do
@@ -26,6 +30,14 @@ defmodule Kevo.API.LoginError do
       step: step,
       request: request,
       network_error: error
+    }
+  end
+
+  def from_json(step, request, error) do
+    %LoginError{
+      step: step,
+      request: request,
+      decode_error: error
     }
   end
 end
