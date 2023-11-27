@@ -3,6 +3,8 @@ defmodule Kevo.API do
   A GenServer that wraps the busy-work of authenticating and querying Kevo's special brand of OIDC.
   """
 
+  alias Kevo.API.Error
+
   use GenServer
   require Logger
 
@@ -76,7 +78,7 @@ defmodule Kevo.API do
 
   defmodule Request do
     @moduledoc """
-    Used for logging errors
+    Used for logging errors.
     """
     defstruct method: "", location: "", headers: [], body: <<>>
   end
@@ -93,8 +95,8 @@ defmodule Kevo.API do
 
   @impl true
   def init(%{username: username, password: password}) do
-    with {:ok, login_conn} <- :gun.open(~c"identity.unikey.com", 443, %{transport: :tls}),
-         {:ok, api_conn} = :gun.open(~c"resi-prd-api.unikey.com", 443, %{transport: :tls}),
+    with {:ok, login_conn} <- :gun.open(~c"#{unikey_login_url_base()}", 443, %{transport: :tls}),
+         {:ok, api_conn} = :gun.open(~c"#{unikey_api_url_base()}", 443, %{transport: :tls}),
          {:ok, %Auth{} = auth} <- login(login_conn, username, password) do
       {:ok,
        %{
@@ -167,10 +169,8 @@ defmodule Kevo.API do
   end
 
   defp get_login_url(conn, auth_url) do
-    alias Kevo.API.LoginError
-
     request = %Request{method: "GET", location: auth_url}
-    stream_ref = :gun.get(conn, :binary.bin_to_list(auth_url))
+    stream_ref = :gun.get(conn, auth_url)
 
     case :gun.await(conn, stream_ref) do
       {:response, :fin, 302, headers} ->
@@ -178,29 +178,27 @@ defmodule Kevo.API do
         {:ok, redirect_location}
 
       {:response, _, status, headers} ->
-        {:error, LoginError.from_status(__ENV__.function, request, {status, headers}, 302)}
+        Error.from_status(request, {status, headers}, 302, __ENV__.function)
 
       {:error, error} ->
-        {:error, LoginError.from_network(__ENV__.function, request, error)}
+        Error.from_network(request, error, __ENV__.function)
     end
   end
 
   defp get_login_page(conn, login_page_url) do
-    alias Kevo.API.LoginError
-
     request = %Request{method: "GET", location: login_page_url}
-    stream_ref = :gun.get(conn, :binary.bin_to_list(login_page_url))
+    stream_ref = :gun.get(conn, login_page_url)
 
     case :gun.await(conn, stream_ref) do
       {:response, :nofin, 200, headers} ->
         {:ok, login_form} = :gun.await_body(conn, stream_ref)
         {:ok, login_form, get_cookies(headers)}
 
-      {:response, _, status, headers} ->
-        {:error, LoginError.from_status(__ENV__.function, request, {status, headers}, 200)}
+      {:response, _, _, _} = response ->
+        Error.from_status(request, response, 200, __ENV__.function)
 
       {:error, error} ->
-        {:error, LoginError.from_network(__ENV__.function, request, error)}
+        Error.from_network(request, error, __ENV__.function)
     end
   end
 
@@ -219,7 +217,7 @@ defmodule Kevo.API do
   end
 
   defp submit_login(conn, username, password, cookies, serialized_client, verification_token) do
-    alias Kevo.API.LoginError
+    location = "/account/login"
 
     req_headers = [
       {"Cookie", Enum.join(cookies, "; ")},
@@ -228,7 +226,7 @@ defmodule Kevo.API do
       {"content-type", "application/x-www-form-urlencoded"}
     ]
 
-    req_body =
+    body =
       www_form_encode(%{
         "SerializedClient" => serialized_client,
         "NumFailedAttempts" => "0",
@@ -239,13 +237,13 @@ defmodule Kevo.API do
       })
 
     request = %Request{
-      method: "GET",
-      location: "/account/login",
+      method: "POST",
+      location: location,
       headers: req_headers,
-      body: req_body
+      body: body
     }
 
-    stream_ref = :gun.post(conn, "/account/login", req_headers, req_body)
+    stream_ref = :gun.post(conn, location, req_headers, body)
 
     case :gun.await(conn, stream_ref) do
       {:response, :fin, 302, res_headers} ->
@@ -253,17 +251,15 @@ defmodule Kevo.API do
         {"location", location} = List.keyfind!(res_headers, "location", 0)
         {:ok, location, [cookie | cookies]}
 
-      {:response, _, status, res_headers} ->
-        {:error, LoginError.from_status(__ENV__.function, request, {status, res_headers}, 302)}
+      {:response, _, _, _} = response ->
+        Error.from_status(request, response, 302, __ENV__.function)
 
       {:error, error} ->
-        {:error, LoginError.from_network(__ENV__.function, request, error)}
+        Error.from_network(request, error, __ENV__.function)
     end
   end
 
   defp get_unikey_code(conn, location, cookies) do
-    alias Kevo.API.LoginError
-
     req_headers = [{"Cookie", Enum.join(cookies, "; ")}]
     request = %Request{method: "GET", location: location, headers: req_headers}
     stream_ref = :gun.get(conn, location, req_headers)
@@ -276,17 +272,15 @@ defmodule Kevo.API do
         %{"code" => code} = URI.decode_query(query)
         {:ok, code}
 
-      {:response, _, status, headers} ->
-        {:error, LoginError.from_status(__ENV__.function, request, {status, headers}, 302)}
+      {:response, _, _, _} = response ->
+        Error.from_status(request, response, 302, __ENV__.function)
 
       {:error, error} ->
-        {:error, LoginError.from_network(__ENV__.function, request, error)}
+        Error.from_network(request, error, __ENV__.function)
     end
   end
 
   defp post_jwt(conn, code, code_verifier, cookies) do
-    alias Kevo.API.LoginError
-
     req_headers = [
       {"Cookie", Enum.join(cookies, "; ")},
       {"host", "identity.unikey.com"},
@@ -294,7 +288,7 @@ defmodule Kevo.API do
       {"content-type", "application/x-www-form-urlencoded"}
     ]
 
-    body =
+    req_body =
       www_form_encode(%{
         "client_id" => client_id(),
         "client_secret" => client_secret(),
@@ -308,10 +302,10 @@ defmodule Kevo.API do
       method: "POST",
       location: "/connect/token",
       headers: req_headers,
-      body: body
+      body: req_body
     }
 
-    stream_ref = :gun.post(conn, "/connect/token", req_headers, body)
+    stream_ref = :gun.post(conn, "/connect/token", req_headers, req_body)
 
     case :gun.await(conn, stream_ref) do
       {:response, :nofin, 200, _} ->
@@ -328,11 +322,11 @@ defmodule Kevo.API do
            :user_id => user_id
          }}
 
-      {:response, _, status, res_headers} ->
-        {:error, LoginError.from_status(__ENV__.function, request, {status, res_headers}, 200)}
+      {:response, _, _, _} = response ->
+        Error.from_status(request, response, 200, __ENV__.function)
 
       {:error, error} ->
-        {:error, LoginError.from_network(__ENV__.function, request, error)}
+        Error.from_network(request, error, __ENV__.function)
     end
   end
 
@@ -480,8 +474,6 @@ defmodule Kevo.API do
   ## REST API Calls
 
   defp do_get_lock(conn, lock_id, req_headers) do
-    alias Kevo.API.Error, as: Err
-
     location = "/api/v2/locks/#{lock_id}"
     request = %Request{method: "GET", location: location, headers: req_headers}
     stream_ref = :gun.get(conn, location, req_headers)
@@ -491,14 +483,14 @@ defmodule Kevo.API do
          {:ok, lock} <- Jason.decode(body) do
       {:ok, lock}
     else
-      {:response, _, status, headers} ->
-        {:error, Err.from_status(request, {status, headers}, 200)}
+      {:response, _, _, _} = response ->
+        Error.from_status(request, response, 200)
 
       {:error, %Jason.DecodeError{} = error} ->
-        {:error, Err.from_body(request, error)}
+        Error.from_body(request, error)
 
       {:error, error} ->
-        {:error, Err.from_network(request, error)}
+        Error.from_network(request, error)
     end
   end
 
@@ -527,14 +519,14 @@ defmodule Kevo.API do
     end
   end
 
-  defp do_get_events(conn, lock_id, page, page_size, headers) do
+  defp do_get_events(conn, lock_id, page, page_size, req_headers) do
     alias Kevo.API.Error, as: Err
 
     location = "/api/v2/locks/#{lock_id}/events?page=#{page}&pageSize=#{page_size}"
-    stream_ref = :gun.get(conn, location, headers)
-    request = %Request{method: "GET", location: location, headers: headers}
+    request = %Request{method: "GET", location: location, headers: req_headers}
+    stream_ref = :gun.get(conn, location, req_headers)
 
-    with {:response, :nofin, 200, _headers} <- :gun.await(conn, stream_ref),
+    with {:response, :nofin, 200, _} <- :gun.await(conn, stream_ref),
          {:ok, body} = :gun.await_body(conn, stream_ref),
          {:ok, events} <- Jason.decode(body) do
       {:ok, events}
@@ -550,27 +542,27 @@ defmodule Kevo.API do
     end
   end
 
-  defp send_command(conn, user_id, lock_id, command, headers) do
+  defp send_command(conn, user_id, lock_id, command, req_headers) do
     alias Kevo.API.Error, as: Err
 
     location = "/api/v2/users/#{user_id}/locks/#{lock_id}/commands"
-    body = Jason.encode!(%{"command" => command})
+    req_body = Jason.encode!(%{"command" => command})
 
-    headers = [
+    req_headers = [
       {"Content-Type", "application/json"},
-      {"Content-Length", "#{byte_size(body)}"} | headers
+      {"Content-Length", "#{byte_size(req_body)}"} | req_headers
     ]
 
-    request = %Request{method: "POST", location: location, headers: headers, body: body}
+    request = %Request{method: "POST", location: location, headers: req_headers, body: req_body}
 
-    stream_ref = :gun.post(conn, location, headers, body)
+    stream_ref = :gun.post(conn, location, req_headers, req_body)
 
     case :gun.await(conn, stream_ref) do
       {:response, _, 201, _} ->
         :ok
 
-      {:response, _, status, headers} ->
-        {:error, Err.from_status(request, {status, headers}, status)}
+      {:response, _, status, res_headers} ->
+        {:error, Err.from_status(request, {status, res_headers}, 201)}
     end
   end
 
@@ -597,8 +589,6 @@ defmodule Kevo.API do
 
   # Obtains a new refresh token.
   defp do_refresh(conn, refresh_token) do
-    alias Kevo.API.RefreshTokenError, as: Err
-
     req_body =
       Jason.encode!(%{
         "client_id" => client_id(),
@@ -621,14 +611,46 @@ defmodule Kevo.API do
          :expires_at => expiration_timestamp(json["expires_in"])
        }}
     else
-      {:response, _, status, res_headers} ->
-        {:error, Err.from_status(request, {status, res_headers})}
+      {:response, _, _, _} = response ->
+        Error.from_status(request, response, 200, __ENV__.function)
 
       {:error, %Jason.DecodeError{} = error} ->
-        {:error, Err.from_body(request, error)}
+        Error.from_body(request, error)
 
       {:error, error} ->
-        {:error, Err.from_network(request, error)}
+        Error.from_network(request, error)
+    end
+  end
+
+  def get_server_nonce(conn) do
+    location = "/api/v2/nonces"
+    req_headers = [{"Content-Type", "application/json"}]
+    body = ~s({"headers":{"Accept": "application/json"}})
+
+    request = %Request{
+      method: "POST",
+      location: location,
+      headers: req_headers,
+      body: body
+    }
+
+    stream_ref = :gun.post(conn, location, req_headers, body)
+
+    case :gun.await(conn, stream_ref) do
+      {:response, :nofin, 201, res_headers} = response ->
+        case List.keyfind(res_headers, "x-unikey-nonce", 0) do
+          {"x-unikey-nonce", server_nonce} ->
+            {:ok, server_nonce}
+
+          nil ->
+            Error.from_headers(request, response, 201, __ENV__.function)
+        end
+
+      {:response, _, _, _} = response ->
+        Error.from_status(request, response, 201, __ENV__.function)
+
+      {:error, error} ->
+        Error.from_network(request, error, __ENV__.function)
     end
   end
 
@@ -670,7 +692,7 @@ defmodule Kevo.API do
         length_encoded_bytes(18, <<1::32-little>>) <>
         length_encoded_bytes(20, <<e::32-little>>) <>
         length_encoded_bytes(21, <<e::32-little>>) <>
-        length_encoded_bytes(22, <<e + 86400::32-little>>) <>
+        length_encoded_bytes(22, <<e + 86_400::32-little>>) <>
         <<48, 1, 0, 6>> <>
         length_encoded_bytes(49, <<0::128>>) <>
         length_encoded_bytes(50, uuid_to_binary(device_uuid4)) <>
@@ -685,33 +707,6 @@ defmodule Kevo.API do
 
   def client_nonce() do
     Base.encode64(:crypto.strong_rand_bytes(64))
-  end
-
-  def get_server_nonce(conn) do
-    alias Kevo.API.GetServerNonceError, as: Err
-
-    req_headers = [{"Content-Type", "application/json"}]
-    body = ~s({"headers":{"Accept": "application/json"}})
-    request = %Request{method: "POST", location: "/api/v2/nonces", headers: req_headers, body: body}
-
-    stream_ref = :gun.post(conn, "/api/v2/nonces", req_headers, body)
-
-    case :gun.await(conn, stream_ref) do
-      {:response, :nofin, 201, res_headers} ->
-        case List.keyfind(res_headers, "x-unikey-nonce", 0) do
-          {"x-unikey-nonce", server_nonce} ->
-            {:ok, server_nonce}
-
-          nil ->
-            {:error, Err.from_headers(request, {201, res_headers})}
-        end
-
-      {:response, _, status, res_headers} ->
-        {:error, Err.from_status(request, {status, res_headers})}
-
-      {:error, error} ->
-        {:error, Err.from_network(request, error)}
-    end
   end
 
   defp unix_now() do
