@@ -21,7 +21,6 @@ defmodule Kevo.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:finch, "~> 0.16"},
       {:uuid, "~> 1.1"},
       {:jason, "~> 1.4"},
       {:html_entities, "~> 0.5"},

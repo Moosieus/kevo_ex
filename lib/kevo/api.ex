@@ -6,14 +6,6 @@ defmodule Kevo.API do
   use GenServer
   require Logger
 
-  alias Kevo.API.{
-    RefreshTokenError,
-    GetServerNonceError,
-    GetLocksError,
-    GetLockEventsError,
-    LoginError
-  }
-
   def unikey_login_url_base(), do: "https://identity.unikey.com"
   @unikey_invalid_login_url "https://identity.unikey.com/account/loginlocal"
   def unikey_api_url_base(), do: "https://resi-prd-api.unikey.com"
@@ -82,6 +74,13 @@ defmodule Kevo.API do
     ]
   end
 
+  defmodule Request do
+    @moduledoc """
+    Used for logging errors
+    """
+    defstruct method: "", location: "", headers: [], body: <<>>
+  end
+
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
     config = %{
@@ -94,35 +93,46 @@ defmodule Kevo.API do
 
   @impl true
   def init(%{username: username, password: password}) do
-
-    case login(username, password) do
-      {:ok, %Auth{} = auth} ->
-        {:ok,
-         %{
-           username => username,
-           password => password,
-           :access_token => auth.access_token,
-           :id_token => auth.id_token,
-           :refresh_token => auth.refresh_token,
-           :expires_at => auth.expires_at,
-           :user_id => auth.user_id
-         }}
-      err -> {:stop, err}
+    with {:ok, login_conn} <- :gun.open(~c"identity.unikey.com", 443, %{transport: :tls}),
+         {:ok, api_conn} = :gun.open(~c"resi-prd-api.unikey.com", 443, %{transport: :tls}),
+         {:ok, %Auth{} = auth} <- login(login_conn, username, password) do
+      {:ok,
+       %{
+         username => username,
+         password => password,
+         :login_conn => login_conn,
+         :api_conn => api_conn,
+         :access_token => auth.access_token,
+         :id_token => auth.id_token,
+         :refresh_token => auth.refresh_token,
+         :expires_at => auth.expires_at,
+         :user_id => auth.user_id
+       }}
+    else
+      err ->
+        {:stop, err}
     end
   end
 
-  defp login(username, password) do
+  defp login(conn, username, password) do
     {code_verifier, code_challenge} = Kevo.Pkce.generate_pkce_pair()
     device_id = UUID.uuid4()
     auth_url = auth_url(code_challenge, device_id)
 
-    with {:ok, login_page_url} <- get_login_url(auth_url),
-         {:ok, login_form, cookies} <- get_login_page(login_page_url),
+    with {:ok, login_page_url} <- get_login_url(conn, auth_url),
+         {:ok, login_form, cookies} <- get_login_page(conn, login_page_url),
          {verification_token, serialized_client} <- scrape_login_form(login_form),
          {:ok, unikey_redirect_location, cookies} <-
-           submit_login(username, password, cookies, serialized_client, verification_token),
-         {:ok, code} <- get_unikey_code(unikey_redirect_location, cookies),
-         {:ok, auth} <- post_jwt(code, code_verifier, cookies) do
+           submit_login(
+             conn,
+             username,
+             password,
+             cookies,
+             serialized_client,
+             verification_token
+           ),
+         {:ok, code} <- get_unikey_code(conn, unikey_redirect_location, cookies),
+         {:ok, auth} <- post_jwt(conn, code, code_verifier, cookies) do
       {:ok, auth}
     else
       {:error, error} ->
@@ -137,8 +147,7 @@ defmodule Kevo.API do
     client_id = client_id()
     state = :crypto.hash(:md5, :crypto.strong_rand_bytes(32))
 
-    unikey_login_url_base() <>
-      "/connect/authorize?" <>
+    "/connect/authorize?" <>
       URI.encode_query(
         %{
           "client_id" => client_id,
@@ -157,38 +166,45 @@ defmodule Kevo.API do
       )
   end
 
-  defp get_login_url(auth_url) do
-    req = Finch.build(:get, auth_url)
+  defp get_login_url(conn, auth_url) do
+    alias Kevo.API.LoginError
 
-    case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 302, headers: headers}} ->
+    request = %Request{method: "GET", location: auth_url}
+    stream_ref = :gun.get(conn, :binary.bin_to_list(auth_url))
+
+    case :gun.await(conn, stream_ref) do
+      {:response, :fin, 302, headers} ->
         {"location", redirect_location} = List.keyfind!(headers, "location", 0)
         {:ok, redirect_location}
 
-      {:ok, %Finch.Response{} = resp} ->
-        {:error, LoginError.from_status(__ENV__.function, req, resp, 302)}
+      {:response, _, status, headers} ->
+        {:error, LoginError.from_status(__ENV__.function, request, {status, headers}, 302)}
 
-      {:error, %Finch.Error{} = err} ->
-        {:error, LoginError.from_network(__ENV__.function, req, err)}
+      {:error, error} ->
+        {:error, LoginError.from_network(__ENV__.function, request, error)}
     end
   end
 
-  defp get_login_page(url) do
-    req = Finch.build(:get, url)
+  defp get_login_page(conn, login_page_url) do
+    alias Kevo.API.LoginError
 
-    case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 200, body: login_form, headers: headers}} ->
+    request = %Request{method: "GET", location: login_page_url}
+    stream_ref = :gun.get(conn, :binary.bin_to_list(login_page_url))
+
+    case :gun.await(conn, stream_ref) do
+      {:response, :nofin, 200, headers} ->
+        {:ok, login_form} = :gun.await_body(conn, stream_ref)
         {:ok, login_form, get_cookies(headers)}
 
-      {:ok, %Finch.Response{} = resp} ->
-        {:error, LoginError.from_status(__ENV__.function, req, resp, 200)}
+      {:response, _, status, headers} ->
+        {:error, LoginError.from_status(__ENV__.function, request, {status, headers}, 200)}
 
-      {:error, %Finch.Error{} = err} ->
-        {:error, LoginError.from_network(__ENV__.function, req, err)}
+      {:error, error} ->
+        {:error, LoginError.from_network(__ENV__.function, request, error)}
     end
   end
 
-  # need to check the contents of the file here are as expected.
+  # need to check if the form is matched correctly.
   defp scrape_login_form(html) do
     %{"token" => request_verification_token} =
       Regex.named_captures(
@@ -202,105 +218,121 @@ defmodule Kevo.API do
     {request_verification_token, HtmlEntities.decode(serialized_client)}
   end
 
-  defp submit_login(username, password, cookies, serialized_client, verification_token) do
-    req =
-      Finch.build(
-        :post,
-        unikey_login_url_base() <> "#{}/account/login",
-        [
-          {"Cookie", Enum.join(cookies, "; ")},
-          {"host", "identity.unikey.com"},
-          {"accept", "*/*"},
-          {"content-type", "application/x-www-form-urlencoded"}
-        ],
-        www_form_encode(%{
-          "SerializedClient" => serialized_client,
-          "NumFailedAttempts" => "0",
-          "Username" => username,
-          "Password" => password,
-          "login" => "",
-          "__RequestVerificationToken" => verification_token
-        })
-      )
+  defp submit_login(conn, username, password, cookies, serialized_client, verification_token) do
+    alias Kevo.API.LoginError
 
-    case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 302, headers: headers}} ->
-        {"set-cookie", cookie} = List.keyfind!(headers, "set-cookie", 0)
-        {"location", location} = List.keyfind!(headers, "location", 0)
+    req_headers = [
+      {"Cookie", Enum.join(cookies, "; ")},
+      {"host", "identity.unikey.com"},
+      {"accept", "*/*"},
+      {"content-type", "application/x-www-form-urlencoded"}
+    ]
+
+    req_body =
+      www_form_encode(%{
+        "SerializedClient" => serialized_client,
+        "NumFailedAttempts" => "0",
+        "Username" => username,
+        "Password" => password,
+        "login" => "",
+        "__RequestVerificationToken" => verification_token
+      })
+
+    request = %Request{
+      method: "GET",
+      location: "/account/login",
+      headers: req_headers,
+      body: req_body
+    }
+
+    stream_ref = :gun.post(conn, "/account/login", req_headers, req_body)
+
+    case :gun.await(conn, stream_ref) do
+      {:response, :fin, 302, res_headers} ->
+        {"set-cookie", cookie} = List.keyfind!(res_headers, "set-cookie", 0)
+        {"location", location} = List.keyfind!(res_headers, "location", 0)
         {:ok, location, [cookie | cookies]}
 
-      {:ok, %Finch.Response{} = resp} ->
-        {:error, LoginError.from_status(__ENV__.function, req, resp, 302)}
+      {:response, _, status, res_headers} ->
+        {:error, LoginError.from_status(__ENV__.function, request, {status, res_headers}, 302)}
 
-      {:error, %Finch.Error{} = err} ->
-        {:error, LoginError.from_network(__ENV__.function, req, err)}
+      {:error, error} ->
+        {:error, LoginError.from_network(__ENV__.function, request, error)}
     end
   end
 
-  defp get_unikey_code(location, cookies) do
-    req =
-      Finch.build(:get, unikey_login_url_base() <> location, [
-        {"Cookie", Enum.join(cookies, "; ")}
-      ])
+  defp get_unikey_code(conn, location, cookies) do
+    alias Kevo.API.LoginError
 
-    case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 302, headers: headers}} ->
+    req_headers = [{"Cookie", Enum.join(cookies, "; ")}]
+    request = %Request{method: "GET", location: location, headers: req_headers}
+    stream_ref = :gun.get(conn, location, req_headers)
+
+    case :gun.await(conn, stream_ref) do
+      {:response, :fin, 302, headers} ->
         {"location", redirect_location} = List.keyfind!(headers, "location", 0)
         %URI{fragment: fragment} = URI.parse(redirect_location)
         %URI{query: query} = URI.parse(fragment)
         %{"code" => code} = URI.decode_query(query)
         {:ok, code}
 
-      {:ok, %Finch.Response{} = resp} ->
-        {:error, LoginError.from_status(__ENV__.function, req, resp, 302)}
+      {:response, _, status, headers} ->
+        {:error, LoginError.from_status(__ENV__.function, request, {status, headers}, 302)}
 
-      {:error, %Finch.Error{} = err} ->
-        {:error, LoginError.from_network(__ENV__.function, req, err)}
+      {:error, error} ->
+        {:error, LoginError.from_network(__ENV__.function, request, error)}
     end
   end
 
-  defp post_jwt(code, code_verifier, cookies) do
-    req =
-      Finch.build(
-        :post,
-        unikey_login_url_base() <> "/connect/token",
-        [
-          {"Cookie", Enum.join(cookies, "; ")},
-          {"host", "identity.unikey.com"},
-          {"accept", "*/*"},
-          {"content-type", "application/x-www-form-urlencoded"}
-        ],
-        www_form_encode(%{
-          "client_id" => client_id(),
-          "client_secret" => client_secret(),
-          "code" => code,
-          "code_verifier" => code_verifier,
-          "grant_type" => "authorization_code",
-          "redirect_uri" => "https://mykevo.com/#/token"
-        })
-      )
+  defp post_jwt(conn, code, code_verifier, cookies) do
+    alias Kevo.API.LoginError
 
-    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch),
-         {:ok, json} <- Jason.decode(body) do
-      {:ok, %{"sub" => user_id}} = Joken.peek_claims(json["id_token"])
+    req_headers = [
+      {"Cookie", Enum.join(cookies, "; ")},
+      {"host", "identity.unikey.com"},
+      {"accept", "*/*"},
+      {"content-type", "application/x-www-form-urlencoded"}
+    ]
 
-      {:ok,
-       %Auth{
-         :access_token => json["access_token"],
-         :id_token => json["id_token"],
-         :refresh_token => json["refresh_token"],
-         :expires_at => expiration_timestamp(json["expires_in"]),
-         :user_id => user_id
-       }}
-    else
-      {:ok, %Finch.Response{} = resp} ->
-        {:error, LoginError.from_status(__ENV__.function, req, resp, 200)}
+    body =
+      www_form_encode(%{
+        "client_id" => client_id(),
+        "client_secret" => client_secret(),
+        "code" => code,
+        "code_verifier" => code_verifier,
+        "grant_type" => "authorization_code",
+        "redirect_uri" => "https://mykevo.com/#/token"
+      })
 
-      {:error, %Jason.DecodeError{} = err} ->
-        {:error, LoginError.from_json(__ENV__.function, req, err)}
+    request = %Request{
+      method: "POST",
+      location: "/connect/token",
+      headers: req_headers,
+      body: body
+    }
 
-      {:error, %Finch.Error{} = err} ->
-        {:error, LoginError.from_network(__ENV__.function, req, err)}
+    stream_ref = :gun.post(conn, "/connect/token", req_headers, body)
+
+    case :gun.await(conn, stream_ref) do
+      {:response, :nofin, 200, _} ->
+        {:ok, body} = :gun.await_body(conn, stream_ref)
+        {:ok, json} = Jason.decode(body)
+        {:ok, %{"sub" => user_id}} = Joken.peek_claims(json["id_token"])
+
+        {:ok,
+         %Auth{
+           :access_token => json["access_token"],
+           :id_token => json["id_token"],
+           :refresh_token => json["refresh_token"],
+           :expires_at => expiration_timestamp(json["expires_in"]),
+           :user_id => user_id
+         }}
+
+      {:response, _, status, res_headers} ->
+        {:error, LoginError.from_status(__ENV__.function, request, {status, res_headers}, 200)}
+
+      {:error, error} ->
+        {:error, LoginError.from_network(__ENV__.function, request, error)}
     end
   end
 
@@ -338,11 +370,17 @@ defmodule Kevo.API do
   ## Callbacks
 
   @impl true
-  def handle_call(:get_locks, _, %{user_id: user_id, access_token: access_token} = state) do
+  def handle_call(:get_locks, _, state) do
+    %{
+      user_id: user_id,
+      access_token: access_token,
+      api_conn: api_conn
+    } = state
+
     # add a function call here to refresh if necessary (within 100 seconds of expiry)
     with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(),
-         {:ok, locks} <- do_get_locks(user_id, headers(access_token, snonce)) do
+         {:ok, snonce} <- get_server_nonce(api_conn),
+         {:ok, locks} <- do_get_locks(api_conn, user_id, headers(access_token, snonce)) do
       {:reply, {:ok, locks}, state}
     else
       err ->
@@ -351,11 +389,16 @@ defmodule Kevo.API do
   end
 
   @impl true
-  def handle_call({:get_lock, lock_id}, _, %{access_token: access_token} = state) do
+  def handle_call({:get_lock, lock_id}, _, state) do
+    %{
+      access_token: access_token,
+      api_conn: api_conn
+    } = state
+
     # add a function call here to refresh if necessary (within 100 seconds of expiry)
     with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(),
-         {:ok, lock} <- do_get_lock(lock_id, headers(access_token, snonce)) do
+         {:ok, snonce} <- get_server_nonce(api_conn),
+         {:ok, lock} <- do_get_lock(api_conn, lock_id, headers(access_token, snonce)) do
       {:reply, {:ok, lock}, state}
     else
       err ->
@@ -364,15 +407,17 @@ defmodule Kevo.API do
   end
 
   @impl true
-  def handle_call(
-        {:get_events, lock_id, page, page_size},
-        _,
-        %{access_token: access_token} = state
-      ) do
+  def handle_call({:get_events, lock_id, page, page_size}, _, state) do
+    %{
+      access_token: access_token,
+      api_conn: api_conn
+    } = state
+
     # add a function call here to refresh if necessary (within 100 seconds of expiry)
     with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(),
-         {:ok, events} <- do_get_events(lock_id, page, page_size, headers(access_token, snonce)) do
+         {:ok, snonce} <- get_server_nonce(api_conn),
+         {:ok, events} <-
+           do_get_events(api_conn, lock_id, page, page_size, headers(access_token, snonce)) do
       {:reply, {:ok, events}, state}
     else
       err ->
@@ -381,11 +426,24 @@ defmodule Kevo.API do
   end
 
   @impl true
-  def handle_call({:lock, lock_id}, _, %{user_id: user_id, access_token: access_token} = state) do
+  def handle_call({:lock, lock_id}, _, state) do
+    %{
+      user_id: user_id,
+      access_token: access_token,
+      api_conn: api_conn
+    } = state
+
     # add a function call here to refresh if necessary (within 100 seconds of expiry)
     with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(),
-         :ok <- send_command(user_id, lock_id, lock_state_lock(), headers(access_token, snonce)) do
+         {:ok, snonce} <- get_server_nonce(api_conn),
+         :ok <-
+           send_command(
+             api_conn,
+             user_id,
+             lock_id,
+             lock_state_lock(),
+             headers(access_token, snonce)
+           ) do
       {:reply, :ok, state}
     else
       err ->
@@ -394,11 +452,24 @@ defmodule Kevo.API do
   end
 
   @impl true
-  def handle_call({:unlock, lock_id}, _, %{user_id: user_id, access_token: access_token} = state) do
+  def handle_call({:unlock, lock_id}, _, state) do
+    %{
+      user_id: user_id,
+      access_token: access_token,
+      api_conn: api_conn
+    } = state
+
     # add a function call here to refresh if necessary (within 100 seconds of expiry)
     with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(),
-         :ok <- send_command(user_id, lock_id, lock_state_unlock(), headers(access_token, snonce)) do
+         {:ok, snonce} <- get_server_nonce(api_conn),
+         :ok <-
+           send_command(
+             api_conn,
+             user_id,
+             lock_id,
+             lock_state_unlock(),
+             headers(access_token, snonce)
+           ) do
       {:reply, :ok, state}
     else
       err ->
@@ -408,65 +479,81 @@ defmodule Kevo.API do
 
   ## REST API Calls
 
-  defp do_get_lock(lock_id, headers) do
-    req =
-      Finch.build(
-        :get,
-        unikey_api_url_base() <> "/api/v2/locks/" <> lock_id,
-        headers
-      )
+  defp do_get_lock(conn, lock_id, req_headers) do
+    alias Kevo.API.Error, as: Err
 
-    case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 200, body: body}} ->
-        case Jason.decode(body) do
-          {:ok, lock} -> {:ok, lock}
-          {:error, err} -> {:error, %GetLocksError{request: req, decode_error: err}}
-        end
+    location = "/api/v2/locks/#{lock_id}"
+    request = %Request{method: "GET", location: location, headers: req_headers}
+    stream_ref = :gun.get(conn, location, req_headers)
 
-      {:ok, response} ->
-        {:error, %GetLocksError{request: req, response: response}}
-
-      {:error, err} ->
-        {:error, %GetLocksError{request: req, network_error: err}}
-    end
-  end
-
-  defp do_get_locks(user_id, headers) do
-    req =
-      Finch.build(
-        :get,
-        unikey_api_url_base() <> "/api/v2/users/" <> user_id <> "/locks",
-        headers
-      )
-
-    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch),
-         {:ok, %{"locks" => locks}} <- Jason.decode(body) do
-      {:ok, locks}
+    with {:response, :nofin, 200, _headers} <- :gun.await(conn, stream_ref),
+         {:ok, body} <- :gun.await_body(conn, stream_ref),
+         {:ok, lock} <- Jason.decode(body) do
+      {:ok, lock}
     else
-      {:ok, response} -> {:error, %GetLocksError{response: response}}
+      {:response, _, status, headers} ->
+        {:error, Err.from_status(request, {status, headers}, 200)}
+
+      {:error, %Jason.DecodeError{} = error} ->
+        {:error, Err.from_body(request, error)}
+
+      {:error, error} ->
+        {:error, Err.from_network(request, error)}
     end
   end
 
-  defp do_get_events(lock_id, page, page_size, headers) do
-    req =
-      Finch.build(
-        :get,
-        unikey_api_url_base() <>
-          "/api/v2/locks/" <> lock_id <> "/events?page=#{page}&pageSize=#{page_size}",
-        headers
-      )
+  defp do_get_locks(conn, user_id, req_headers) do
+    alias Kevo.API.Error, as: Err
 
-    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch),
+    location = "/api/v2/users/#{user_id}/locks"
+    request = %Request{method: "GET", location: location, headers: req_headers}
+    stream_ref = :gun.get(conn, location, req_headers)
+
+    with {:response, :nofin, 200, _} <- :gun.await(conn, stream_ref),
+         {:ok, body} <- :gun.await_body(conn, stream_ref) do
+      case Jason.decode(body) do
+        {:ok, %{"locks" => locks}} ->
+          {:ok, locks}
+
+        {:error, error} ->
+          {:error, Err.from_body(request, error)}
+      end
+    else
+      {:response, :nofin, status, res_headers} ->
+        {:error, Err.from_status(request, {status, res_headers}, 200)}
+
+      {:error, error} ->
+        {:error, Err.from_network(request, error)}
+    end
+  end
+
+  defp do_get_events(conn, lock_id, page, page_size, headers) do
+    alias Kevo.API.Error, as: Err
+
+    location = "/api/v2/locks/#{lock_id}/events?page=#{page}&pageSize=#{page_size}"
+    stream_ref = :gun.get(conn, location, headers)
+    request = %Request{method: "GET", location: location, headers: headers}
+
+    with {:response, :nofin, 200, _headers} <- :gun.await(conn, stream_ref),
+         {:ok, body} = :gun.await_body(conn, stream_ref),
          {:ok, events} <- Jason.decode(body) do
       {:ok, events}
     else
-      {:ok, %Finch.Response{} = response} -> {:error, %GetLockEventsError{response: response}}
-      {:error, %Finch.Error{} = err} -> {:error, %GetLockEventsError{network_error: err}}
-      {:error, %Jason.DecodeError{} = err} -> {:error, %GetLockEventsError{decode_error: err}}
+      {:response, _, status, headers} ->
+        {:error, Err.from_status(request, {status, headers}, 200)}
+
+      {:error, %Jason.DecodeError{} = err} ->
+        {:error, Err.from_body(request, err)}
+
+      {:error, error} ->
+        {:error, Err.from_network(request, error)}
     end
   end
 
-  defp send_command(user_id, lock_id, command, headers) do
+  defp send_command(conn, user_id, lock_id, command, headers) do
+    alias Kevo.API.Error, as: Err
+
+    location = "/api/v2/users/#{user_id}/locks/#{lock_id}/commands"
     body = Jason.encode!(%{"command" => command})
 
     headers = [
@@ -474,25 +561,29 @@ defmodule Kevo.API do
       {"Content-Length", "#{byte_size(body)}"} | headers
     ]
 
-    req =
-      Finch.build(
-        :post,
-        unikey_api_url_base() <>
-          "/api/v2/users/" <> user_id <> "/locks/" <> lock_id <> "/commands",
-        headers,
-        body
-      )
+    request = %Request{method: "POST", location: location, headers: headers, body: body}
 
-    case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 201}} -> :ok
-      {:ok, resp} -> {:error, resp}
+    stream_ref = :gun.post(conn, location, headers, body)
+
+    case :gun.await(conn, stream_ref) do
+      {:response, _, 201, _} ->
+        :ok
+
+      {:response, _, status, headers} ->
+        {:error, Err.from_status(request, {status, headers}, status)}
     end
   end
 
   # Checks if a new refresh token is needed and obtains it if needed.
-  defp check_refresh(%{refresh_token: refresh_token, expires_at: expire_time} = state) do
+  defp check_refresh(state) do
+    %{
+      refresh_token: refresh_token,
+      expires_at: expire_time,
+      api_conn: api_conn
+    } = state
+
     if expire_time < DateTime.to_unix(DateTime.utc_now()) + 100 do
-      with {:ok, %Refresh{} = refresh} <- do_refresh(refresh_token) do
+      with {:ok, %Refresh{} = refresh} <- do_refresh(api_conn, refresh_token) do
         state
         |> Map.put(:access_token, refresh.access_token)
         |> Map.put(:id_token, refresh.id_token)
@@ -505,21 +596,22 @@ defmodule Kevo.API do
   end
 
   # Obtains a new refresh token.
-  defp do_refresh(refresh_token) do
-    req =
-      Finch.build(
-        :post,
-        unikey_login_url_base() <> "/connect/token",
-        [],
-        Jason.encode!(%{
-          "client_id" => client_id(),
-          "client_secret" => client_secret(),
-          "grant_type" => "refresh_token",
-          "refresh_token" => refresh_token
-        })
-      )
+  defp do_refresh(conn, refresh_token) do
+    alias Kevo.API.RefreshTokenError, as: Err
 
-    with {:ok, %Finch.Response{status: 200, body: body}} <- Finch.request(req, KevoFinch),
+    req_body =
+      Jason.encode!(%{
+        "client_id" => client_id(),
+        "client_secret" => client_secret(),
+        "grant_type" => "refresh_token",
+        "refresh_token" => refresh_token
+      })
+
+    request = %Request{method: "POST", location: "/connect/token", headers: [], body: req_body}
+    stream_ref = :gun.post(conn, "/connect/token", [], req_body)
+
+    with {:response, :nofin, 200, _headers} <- :gun.await(conn, stream_ref),
+         {:ok, body} = :gun.await_body(conn, stream_ref),
          {:ok, json} <- Jason.decode(body) do
       {:ok,
        %Refresh{
@@ -529,15 +621,14 @@ defmodule Kevo.API do
          :expires_at => expiration_timestamp(json["expires_in"])
        }}
     else
-      #
-      {:error, %Finch.Error{} = err} ->
-        {:error, %RefreshTokenError{request: req, network_error: err}}
+      {:response, _, status, res_headers} ->
+        {:error, Err.from_status(request, {status, res_headers})}
 
-      {:ok, %Finch.Response{} = response} ->
-        {:error, %RefreshTokenError{request: req, response: response}}
+      {:error, %Jason.DecodeError{} = error} ->
+        {:error, Err.from_body(request, error)}
 
-      {:error, %Jason.DecodeError{} = err} ->
-        {:error, %RefreshTokenError{request: req, decode_error: err}}
+      {:error, error} ->
+        {:error, Err.from_network(request, error)}
     end
   end
 
@@ -596,36 +687,30 @@ defmodule Kevo.API do
     Base.encode64(:crypto.strong_rand_bytes(64))
   end
 
-  def get_server_nonce() do
-    body =
-      Jason.encode!(%{
-        "headers" => %{"Accept" => "application/json"}
-      })
+  def get_server_nonce(conn) do
+    alias Kevo.API.GetServerNonceError, as: Err
 
-    req =
-      Finch.build(
-        :post,
-        unikey_api_url_base() <> "/api/v2/nonces",
-        [{"Content-Type", "application/json"}],
-        body
-      )
+    req_headers = [{"Content-Type", "application/json"}]
+    body = ~s({"headers":{"Accept": "application/json"}})
+    request = %Request{method: "POST", location: "/api/v2/nonces", headers: req_headers, body: body}
 
-    case Finch.request(req, KevoFinch) do
-      {:ok, %Finch.Response{status: 201, headers: headers}} ->
-        case List.keyfind(headers, "x-unikey-nonce", 0) do
+    stream_ref = :gun.post(conn, "/api/v2/nonces", req_headers, body)
+
+    case :gun.await(conn, stream_ref) do
+      {:response, :nofin, 201, res_headers} ->
+        case List.keyfind(res_headers, "x-unikey-nonce", 0) do
           {"x-unikey-nonce", server_nonce} ->
-            {"x-unikey-nonce", server_nonce}
             {:ok, server_nonce}
 
           nil ->
-            {:error, %GetServerNonceError{headers: headers}}
+            {:error, Err.from_headers(request, {201, res_headers})}
         end
 
-      {:ok, response} ->
-        {:error, %GetServerNonceError{request: req, response: response}}
+      {:response, _, status, res_headers} ->
+        {:error, Err.from_status(request, {status, res_headers})}
 
       {:error, error} ->
-        {:error, %GetServerNonceError{request: req, network_error: error}}
+        {:error, Err.from_network(request, error)}
     end
   end
 
@@ -665,8 +750,4 @@ defmodule Kevo.API do
   defp password!(opts) do
     Keyword.get(opts, :password) || raise(ArgumentError, "must supply a password")
   end
-
-  # defp finch!(opts) do
-  #   Keyword.get(opts, :finch) || raise(ArgumentError, "must supply an instance of finch")
-  # end
 end
