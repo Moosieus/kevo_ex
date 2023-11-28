@@ -10,8 +10,7 @@ Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikel
 - Document everything
 - Write tests (will need mocking)
 - Struct-type the responses or provide documented examples
-- Properly type the errors in `Kevo.Api`
-- Maybe rename `Kevo.Api` to `Kevo.Api`
+- Refactor `Kevo.Api` to concurrent `:gen_statem`
 - Consider if `login` should be called when initializing `Kevo.Api`
   - Argument in favor: Fail in pre-flight vs in-air
   - Argument against: Blocking initialization
