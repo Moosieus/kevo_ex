@@ -1,4 +1,4 @@
-defmodule Kevo.API.Error do
+defmodule Kevo.Api.Error do
   defexception [
     :reason, # :network_error, :unexpected_status, :unexpected_body
     :request, # map of request parameters

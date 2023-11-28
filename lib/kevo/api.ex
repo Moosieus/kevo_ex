@@ -1,9 +1,9 @@
-defmodule Kevo.API do
+defmodule Kevo.Api do
   @moduledoc """
   A GenServer that wraps the busy-work of authenticating and querying Kevo's special brand of OIDC.
   """
 
-  alias Kevo.API.Error
+  alias Kevo.Api.Error
 
   use GenServer
   require Logger
@@ -351,29 +351,29 @@ defmodule Kevo.API do
   Retrieves all locks visible to the logged in user.
   """
   def get_locks() do
-    GenServer.call(Kevo.API, :get_locks)
+    GenServer.call(Kevo.Api, :get_locks)
   end
 
   @doc """
   Retrieves the lock's state.
   """
   def get_lock(lock_id) do
-    GenServer.call(Kevo.API, {:get_lock, lock_id})
+    GenServer.call(Kevo.Api, {:get_lock, lock_id})
   end
 
   def lock(lock_id) do
-    GenServer.call(Kevo.API, {:lock, lock_id})
+    GenServer.call(Kevo.Api, {:lock, lock_id})
   end
 
   @doc """
   Get events for the lock. Follows the frontend's paging behavior.
   """
   def get_events(lock_id, page \\ 1, page_size \\ 10) do
-    GenServer.call(Kevo.API, {:get_events, lock_id, page, page_size})
+    GenServer.call(Kevo.Api, {:get_events, lock_id, page, page_size})
   end
 
   def unlock(lock_id) do
-    GenServer.call(Kevo.API, {:unlock, lock_id})
+    GenServer.call(Kevo.Api, {:unlock, lock_id})
   end
 
   ## Callbacks
@@ -510,7 +510,7 @@ defmodule Kevo.API do
   end
 
   defp do_get_locks(conn, user_id, req_headers) do
-    alias Kevo.API.Error, as: Err
+    alias Kevo.Api.Error, as: Err
 
     location = "/api/v2/users/#{user_id}/locks"
     request = %Request{method: "GET", location: location, headers: req_headers}
@@ -535,7 +535,7 @@ defmodule Kevo.API do
   end
 
   defp do_get_events(conn, lock_id, page, page_size, req_headers) do
-    alias Kevo.API.Error, as: Err
+    alias Kevo.Api.Error, as: Err
 
     location = "/api/v2/locks/#{lock_id}/events?page=#{page}&pageSize=#{page_size}"
     request = %Request{method: "GET", location: location, headers: req_headers}
@@ -558,7 +558,7 @@ defmodule Kevo.API do
   end
 
   defp send_command(conn, user_id, lock_id, command, req_headers) do
-    alias Kevo.API.Error, as: Err
+    alias Kevo.Api.Error, as: Err
 
     location = "/api/v2/users/#{user_id}/locks/#{lock_id}/commands"
     req_body = Jason.encode!(%{"command" => command})
