@@ -29,6 +29,7 @@ defmodule Kevo.MixProject do
       {:ex_doc, "~> 0.30", only: :dev, runtime: false},
       {:credo, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.1", only: [:dev], runtime: false},
+      {:certifi, "~> 2.12"}
     ]
   end
 end

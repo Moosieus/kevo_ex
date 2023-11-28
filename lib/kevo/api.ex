@@ -8,9 +8,9 @@ defmodule Kevo.API do
   use GenServer
   require Logger
 
-  def unikey_login_url_base(), do: "https://identity.unikey.com"
+  def unikey_login_url_base(), do: "identity.unikey.com"
   @unikey_invalid_login_url "https://identity.unikey.com/account/loginlocal"
-  def unikey_api_url_base(), do: "https://resi-prd-api.unikey.com"
+  def unikey_api_url_base(), do: "resi-prd-api.unikey.com"
 
   # Kevo uses ODIC but doesn't depend on `client_secret` for security purposes - It's the same for all clients.
   # In essence, `client_id`, `tenant_id` and `client_secret` are here for standards/ceremony sake.
@@ -33,6 +33,19 @@ defmodule Kevo.API do
   def command_status_delivered(), do: 7
   def command_status_cancelled(), do: 6
   def command_status_complete(), do: 5
+
+  def gun_opts do
+    %{
+      transport: :tls,
+      protocols: [:http2],
+      tls_opts: [
+        verify: :verify_peer,
+        cacerts: :certifi.cacerts(),
+        depth: 3,
+        customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
+      ]
+    }
+  end
 
   defmodule Lock do
     @moduledoc """
@@ -95,14 +108,13 @@ defmodule Kevo.API do
 
   @impl true
   def init(%{username: username, password: password}) do
-    with {:ok, login_conn} <- :gun.open(~c"#{unikey_login_url_base()}", 443, %{transport: :tls}),
-         {:ok, api_conn} = :gun.open(~c"#{unikey_api_url_base()}", 443, %{transport: :tls}),
-         {:ok, %Auth{} = auth} <- login(login_conn, username, password) do
+    with {:ok, %Auth{} = auth} <- login(username, password),
+         {:ok, api_conn} <- :gun.open(~c"#{unikey_api_url_base()}", 443, gun_opts()),
+         {:ok, _} <- :gun.await_up(api_conn) do
       {:ok,
        %{
          username => username,
          password => password,
-         :login_conn => login_conn,
          :api_conn => api_conn,
          :access_token => auth.access_token,
          :id_token => auth.id_token,
@@ -116,12 +128,14 @@ defmodule Kevo.API do
     end
   end
 
-  defp login(conn, username, password) do
+  defp login(username, password) do
     {code_verifier, code_challenge} = Kevo.Pkce.generate_pkce_pair()
     device_id = UUID.uuid4()
     auth_url = auth_url(code_challenge, device_id)
 
-    with {:ok, login_page_url} <- get_login_url(conn, auth_url),
+    with {:ok, conn} <- :gun.open(~c"#{unikey_login_url_base()}", 443, gun_opts()),
+         {:ok, _} <- :gun.await_up(conn),
+         {:ok, login_page_url} <- get_login_url(conn, auth_url),
          {:ok, login_form, cookies} <- get_login_page(conn, login_page_url),
          {verification_token, serialized_client} <- scrape_login_form(login_form),
          {:ok, unikey_redirect_location, cookies} <-
@@ -134,7 +148,8 @@ defmodule Kevo.API do
              verification_token
            ),
          {:ok, code} <- get_unikey_code(conn, unikey_redirect_location, cookies),
-         {:ok, auth} <- post_jwt(conn, code, code_verifier, cookies) do
+         {:ok, auth} <- post_jwt(conn, code, code_verifier, cookies),
+         :ok <- :gun.close(conn) do
       {:ok, auth}
     else
       {:error, error} ->
@@ -170,11 +185,11 @@ defmodule Kevo.API do
 
   defp get_login_url(conn, auth_url) do
     request = %Request{method: "GET", location: auth_url}
-    stream_ref = :gun.get(conn, auth_url)
+    stream_ref = :gun.get(conn, ~c"#{auth_url}")
 
     case :gun.await(conn, stream_ref) do
       {:response, :fin, 302, headers} ->
-        {"location", redirect_location} = List.keyfind!(headers, "location", 0)
+        {"location", "https://identity.unikey.com" <> redirect_location} = List.keyfind!(headers, "location", 0)
         {:ok, redirect_location}
 
       {:response, _, status, headers} ->
