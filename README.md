@@ -4,7 +4,6 @@ An Elixir client library for Kevo's reverse engineered web API.
 Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikely to receive support for [Seam](https://www.seam.co/), the existing web API should (hopefully) remain (relatively) stable.
 
 ## Todo
-- Refactor `Kevo.Api` to concurrent `:gen_statem`
 - Convert library to an application
 - Implement Websocket Behaviour
 - Implement top-level Supervisor
@@ -12,9 +11,6 @@ Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikel
 - Document everything
 - Write tests (will need mocking)
 - Struct-type the responses or provide documented examples
-- Consider if `login` should be called when initializing `Kevo.Api`
-  - Argument in favor: Fail in pre-flight vs in-air
-  - Argument against: Blocking initialization
 
 *Presently using Finch for the API but may switch entirely to `:gun`...*
 
@@ -40,8 +36,9 @@ be found at <https://hexdocs.pm/kevo_ex>.
 
 ## Initialization
 ```elixir
-Finch.start_link(name: KevoFinch)
-Kevo.Api.start_link(username: "", password: "")
+Kevo.Api.Client.start_link(username: "", password: "")
+
+Kevo.Api.get_locks()
 ```
 
 ## Acknowledgments

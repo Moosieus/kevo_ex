@@ -1,20 +1,32 @@
-defmodule Kevo.Api.Genserver do
+defmodule Kevo.Api.Client do
   @moduledoc """
-  A GenServer that wraps the busy-work of authenticating and querying Kevo's special brand of OIDC.
+  A state machine that handles the authentication and connection to Kevo.
   """
-  use GenServer
+  @behaviour :gen_statem
+
+  require Logger
 
   import Kevo.Api.Constants
 
   alias Kevo.Api.{
     Auth,
-    # Lock,
     Refresh,
     Request,
     Error
   }
 
-  require Logger
+  defmodule Data do
+    defstruct [
+      :username,
+      :password,
+      :access_token,
+      :id_token,
+      :refresh_token,
+      :expires_at,
+      :user_id,
+      :api_conn
+    ]
+  end
 
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
@@ -27,25 +39,21 @@ defmodule Kevo.Api.Genserver do
   end
 
   @impl true
-  def init(%{username: username, password: password}) do
-    with {:ok, %Auth{} = auth} <- login(username, password),
-         {:ok, api_conn} <- :gun.open(~c"#{unikey_api_url_base()}", 443, gun_opts()),
-         {:ok, _} <- :gun.await_up(api_conn) do
-      {:ok,
-       %{
-         username => username,
-         password => password,
-         :api_conn => api_conn,
-         :access_token => auth.access_token,
-         :id_token => auth.id_token,
-         :refresh_token => auth.refresh_token,
-         :expires_at => auth.expires_at,
-         :user_id => auth.user_id
-       }}
-    else
-      err ->
-        {:stop, err}
-    end
+  def init(state) do
+    {:ok, :initializing, state, [{:next_event, :internal, []}]}
+  end
+
+  @impl true
+  def callback_mode, do: :state_functions
+
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :permanent,
+      shutdown: 500
+    }
   end
 
   defp login(username, password) do
@@ -267,150 +275,103 @@ defmodule Kevo.Api.Genserver do
     end
   end
 
-  ## API
+  ## State Machine
 
-  @doc """
-  Retrieves all locks visible to the logged in user.
-  """
-  def get_locks() do
-    GenServer.call(Kevo.Api, :get_locks)
-  end
-
-  @doc """
-  Retrieves the lock's state.
-  """
-  def get_lock(lock_id) do
-    GenServer.call(Kevo.Api, {:get_lock, lock_id})
-  end
-
-  def lock(lock_id) do
-    GenServer.call(Kevo.Api, {:lock, lock_id})
-  end
-
-  @doc """
-  Get events for the lock. Follows the frontend's paging behavior.
-  """
-  def get_events(lock_id, page \\ 1, page_size \\ 10) do
-    GenServer.call(Kevo.Api, {:get_events, lock_id, page, page_size})
-  end
-
-  def unlock(lock_id) do
-    GenServer.call(Kevo.Api, {:unlock, lock_id})
-  end
-
-  ## Callbacks
-
-  @impl true
-  def handle_call(:get_locks, _, state) do
-    %{
-      user_id: user_id,
-      access_token: access_token,
-      api_conn: api_conn
-    } = state
-
-    # add a function call here to refresh if necessary (within 100 seconds of expiry)
-    with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(api_conn),
-         {:ok, locks} <- do_get_locks(api_conn, user_id, headers(access_token, snonce)) do
-      {:reply, {:ok, locks}, state}
+  def initializing(:internal, [], %Data{} = data) do
+    with {:ok, %Auth{} = auth} <- login(data.username, data.password) do
+      {:next_state, :disconnected,
+       %Data{
+         :username => data.username,
+         :password => data.password,
+         :access_token => auth.access_token,
+         :id_token => auth.id_token,
+         :refresh_token => auth.refresh_token,
+         :expires_at => auth.expires_at,
+         :user_id => auth.user_id
+       }}
     else
       err ->
-        {:reply, err, state}
+        {:stop, :login_failed, err}
     end
   end
 
-  @impl true
-  def handle_call({:get_lock, lock_id}, _, state) do
+  # wake from rest
+  def disconnected({:call, _from}, _request, data) do
+    {:next_state, :connecting, data,
+     [
+       {:next_event, :internal, :open, data},
+       {:state_timeout, :timer.seconds(10), :connect_timeout},
+       :postpone
+     ]}
+  end
+
+  # startup from rest
+  def connecting(:internal, :open, %Data{} = data) do
+    {:ok, api_conn} = :gun.open(~c"#{unikey_api_url_base()}", 443, gun_opts())
+    {:ok, _} = :gun.await_up(api_conn)
+
+    {:keep_state, %{data | api_conn: api_conn}}
+  end
+
+  # connection established -> connected
+  def connecting(:info, {:gun_up, conn_pid, _}, %{api_conn: conn_pid} = data) do
+    {:next_state, :connected, data}
+  end
+
+  # postpone calls while connecting
+  def connecting({:call, _from}, _request, _data) do
+    {:keep_state_and_data, :postpone}
+  end
+
+  # connecting timeout
+  def connecting(:state_timeout, :connect_timeout, _data) do
+    {:stop, :connect_timeout}
+  end
+
+  # open for business
+  def connected({:call, from}, call, %Data{} = data) do
     %{
       access_token: access_token,
       api_conn: api_conn
-    } = state
+    } = data
 
-    # add a function call here to refresh if necessary (within 100 seconds of expiry)
-    with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(api_conn),
-         {:ok, lock} <- do_get_lock(api_conn, lock_id, headers(access_token, snonce)) do
-      {:reply, {:ok, lock}, state}
+    with {:ok, data} <- check_refresh(data),
+         {:ok, snonce} <- get_server_nonce(api_conn) do
+      resp = dispatch(call, headers(access_token, snonce), data)
+      {:keep_state, data, [{:reply, from, resp}]}
     else
       err ->
-        {:reply, err, state}
+        {:keep_state, data, [{:reply, from, err}]}
     end
   end
 
-  @impl true
-  def handle_call({:get_events, lock_id, page, page_size}, _, state) do
-    %{
-      access_token: access_token,
-      api_conn: api_conn
-    } = state
+  # connection dropped
+  def connected(:info, {:gun_down, conn, _, _, _}, %Data{} = data) do
+    # stop gun from reopening connection
+    :ok = :gun.close(conn)
+    :ok = :gun.flush(conn)
 
-    # add a function call here to refresh if necessary (within 100 seconds of expiry)
-    with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(api_conn),
-         {:ok, events} <-
-           do_get_events(api_conn, lock_id, page, page_size, headers(access_token, snonce)) do
-      {:reply, {:ok, events}, state}
-    else
-      err ->
-        {:reply, err, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:lock, lock_id}, _, state) do
-    %{
-      user_id: user_id,
-      access_token: access_token,
-      api_conn: api_conn
-    } = state
-
-    # add a function call here to refresh if necessary (within 100 seconds of expiry)
-    with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(api_conn),
-         :ok <-
-           send_command(
-             api_conn,
-             user_id,
-             lock_id,
-             lock_state_lock(),
-             headers(access_token, snonce)
-           ) do
-      {:reply, :ok, state}
-    else
-      err ->
-        {:reply, err, state}
-    end
-  end
-
-  @impl true
-  def handle_call({:unlock, lock_id}, _, state) do
-    %{
-      user_id: user_id,
-      access_token: access_token,
-      api_conn: api_conn
-    } = state
-
-    # add a function call here to refresh if necessary (within 100 seconds of expiry)
-    with {:ok, state} <- check_refresh(state),
-         {:ok, snonce} <- get_server_nonce(api_conn),
-         :ok <-
-           send_command(
-             api_conn,
-             user_id,
-             lock_id,
-             lock_state_unlock(),
-             headers(access_token, snonce)
-           ) do
-      {:reply, :ok, state}
-    else
-      err ->
-        {:reply, err, state}
-    end
+    {:next_state, :disconnected, %{data | api_conn: nil}}
   end
 
   ## REST API Calls
 
-  defp do_get_lock(conn, lock_id, req_headers) do
+  defp dispatch(:get_locks, req_headers, %Data{} = data),
+    do: do_get_locks(data.api_conn, req_headers, data.user_id)
+
+  defp dispatch({:get_lock, lock_id}, req_headers, %Data{} = data),
+    do: do_get_lock(data.api_conn, req_headers, lock_id)
+
+  defp dispatch({:get_events, lock_id, page, page_size}, req_headers, %Data{} = data),
+    do: do_get_events(data.api_conn, req_headers, lock_id, page, page_size)
+
+  defp dispatch({:lock, lock_id}, req_headers, %Data{} = data),
+    do: send_command(data.api_conn, req_headers, data.user_id, lock_id, lock_state_lock())
+
+  defp dispatch({:unlock, lock_id}, req_headers, %Data{} = data),
+    do: send_command(data.api_conn, req_headers, data.user_id, lock_id, lock_state_unlock())
+
+  defp do_get_lock(conn, req_headers, lock_id) do
     location = "/api/v2/locks/#{lock_id}"
     request = %Request{method: "GET", location: location, headers: req_headers}
     stream_ref = :gun.get(conn, location, req_headers)
@@ -431,7 +392,7 @@ defmodule Kevo.Api.Genserver do
     end
   end
 
-  defp do_get_locks(conn, user_id, req_headers) do
+  defp do_get_locks(conn, req_headers, user_id) do
     alias Kevo.Api.Error, as: Err
 
     location = "/api/v2/users/#{user_id}/locks"
@@ -456,7 +417,7 @@ defmodule Kevo.Api.Genserver do
     end
   end
 
-  defp do_get_events(conn, lock_id, page, page_size, req_headers) do
+  defp do_get_events(conn, req_headers, lock_id, page, page_size) do
     alias Kevo.Api.Error, as: Err
 
     location = "/api/v2/locks/#{lock_id}/events?page=#{page}&pageSize=#{page_size}"
@@ -479,7 +440,7 @@ defmodule Kevo.Api.Genserver do
     end
   end
 
-  defp send_command(conn, user_id, lock_id, command, req_headers) do
+  defp send_command(conn, req_headers, user_id, lock_id, command) do
     alias Kevo.Api.Error, as: Err
 
     location = "/api/v2/users/#{user_id}/locks/#{lock_id}/commands"
