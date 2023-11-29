@@ -10,8 +10,12 @@ defmodule Kevo.Supervisor do
   end
 
   @impl true
-  def init(_config) do
-    children = []
-    Supervisor.init(children, strategy: :one_for_one)
+  def init({username, password}) do
+    children = [
+      {Kevo.Api.Client, username: username, password: password, name: Kevo.Api.Client},
+      # {Kevo.Socket, name: Kevo.Socket}
+    ]
+
+    Supervisor.init(children, strategy: :one_for_all)
   end
 end

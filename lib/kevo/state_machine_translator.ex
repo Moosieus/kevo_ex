@@ -1,4 +1,4 @@
-defmodule Nostrum.StateMachineTranslator do
+defmodule Kevo.StateMachineTranslator do
   @moduledoc """
   Translate error reports for `:gen_statem` modules in Elixir.
 

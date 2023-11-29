@@ -1,12 +1,15 @@
 defmodule Kevo.Api.Client do
   @moduledoc """
-  A state machine that handles the authentication and connection to Kevo.
+  A state machine that handles the authentication and connection to Kevo's HTTP API.
+
+  HTTP requests sent by this client are blocking for now.
+  This could be revisited one day, but for now I don't want perfect to be the enemy of good.
   """
   @behaviour :gen_statem
 
   require Logger
 
-  import Kevo.Api.Constants
+  import Kevo.Common
 
   alias Kevo.Api.{
     Auth,
@@ -28,21 +31,6 @@ defmodule Kevo.Api.Client do
     ]
   end
 
-  @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
-  def start_link(opts) do
-    config = %{
-      username: username!(opts),
-      password: password!(opts)
-    }
-
-    GenServer.start_link(__MODULE__, config, name: __MODULE__)
-  end
-
-  @impl true
-  def init(state) do
-    {:ok, :initializing, state, [{:next_event, :internal, []}]}
-  end
-
   @impl true
   def callback_mode, do: :state_functions
 
@@ -51,9 +39,26 @@ defmodule Kevo.Api.Client do
       id: __MODULE__,
       start: {__MODULE__, :start_link, [opts]},
       type: :worker,
-      restart: :permanent,
+      restart: :transient,
       shutdown: 500
     }
+  end
+
+  @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
+  def start_link(opts) do
+    config = %{
+      username: username!(opts),
+      password: password!(opts)
+    }
+
+    :gen_statem.start_link({:global, __MODULE__}, __MODULE__, config, opts)
+  end
+
+  @impl true
+  def init(data) do
+    Logger.info("Kickoff!")
+
+    {:ok, :initializing, data, [{:next_event, :internal, :initialize}]}
   end
 
   defp login(username, password) do
@@ -61,7 +66,7 @@ defmodule Kevo.Api.Client do
     device_id = UUID.uuid4()
     auth_url = auth_url(code_challenge, device_id)
 
-    with {:ok, conn} <- :gun.open(~c"#{unikey_login_url_base()}", 443, gun_opts()),
+    with {:ok, conn} <- :gun.open('#{unikey_login_url_base()}', 443, gun_opts()),
          {:ok, _} <- :gun.await_up(conn),
          {:ok, login_page_url} <- get_login_url(conn, auth_url),
          {:ok, login_form, cookies} <- get_login_page(conn, login_page_url),
@@ -277,8 +282,10 @@ defmodule Kevo.Api.Client do
 
   ## State Machine
 
-  def initializing(:internal, [], %Data{} = data) do
+  def initializing(:internal, :initialize, %Data{} = data) do
+    Logger.info("Initializing Kevo API client...")
     with {:ok, %Auth{} = auth} <- login(data.username, data.password) do
+      Logger.info("Logged in.")
       {:next_state, :disconnected,
        %Data{
          :username => data.username,
@@ -296,7 +303,7 @@ defmodule Kevo.Api.Client do
   end
 
   # wake from rest
-  def disconnected({:call, _from}, _request, data) do
+  def disconnected({:call, _from}, _request, %Data{} = data) do
     {:next_state, :connecting, data,
      [
        {:next_event, :internal, :open, data},
@@ -326,6 +333,25 @@ defmodule Kevo.Api.Client do
   # connecting timeout
   def connecting(:state_timeout, :connect_timeout, _data) do
     {:stop, :connect_timeout}
+  end
+
+  # special case when websocket has to start
+  def connected({:call, from}, :ws_init, %Data{} = data) do
+    %Data{
+      access_token: access_token,
+      user_id: user_id
+    } = data
+
+    reply =
+      case get_server_nonce(data.api_conn) do
+        {:ok, snonce} ->
+          {:ok, {access_token, user_id, snonce}}
+
+        {:error, error} ->
+          {:error, error}
+      end
+
+    {:keep_state, data, [{:reply, from, reply}]}
   end
 
   # open for business
@@ -520,7 +546,7 @@ defmodule Kevo.Api.Client do
     end
   end
 
-  def get_server_nonce(conn) do
+  defp get_server_nonce(conn) do
     location = "/api/v2/nonces"
     req_headers = [{"Content-Type", "application/json"}]
     body = ~s({"headers":{"Accept": "application/json"}})
@@ -601,10 +627,6 @@ defmodule Kevo.Api.Client do
 
   defp length_encoded_bytes(val, data) do
     <<val::8, byte_size(data)::16-little, data::bytes>>
-  end
-
-  def client_nonce() do
-    Base.encode64(:crypto.strong_rand_bytes(64))
   end
 
   defp unix_now() do

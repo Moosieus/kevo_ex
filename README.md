@@ -34,10 +34,10 @@ and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
 be found at <https://hexdocs.pm/kevo_ex>.
 -->
 
-## Initialization
+## Dev Usage
 ```elixir
+Logger.add_translator({Kevo.StateMachineTranslator, :translate})
 Kevo.Api.Client.start_link(username: "", password: "")
-
 Kevo.Api.get_locks()
 ```
 

@@ -1,26 +1,116 @@
 defmodule Kevo.Socket do
   @moduledoc """
-  🚧 Work in progress 🚧
+  A websocket client for receiving events from Kevo.
+
+  The relationship's receive-only, Kevo doesn't take any messages from the client.
   """
 
-  @unikey_ws_url_base "wss://resi-prd-ws.unikey.com"
-  @user_agent "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"
+  @behaviour :gen_statem
 
-  def start_link({auth_token, server_nonce, user_id}) do
-    state = %{
-      auth_token: auth_token,
-      server_nonce: server_nonce,
-      user_id: user_id
+  require Logger
+
+  import Kevo.Common
+
+  @user_agent {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
+
+  @impl true
+  def callback_mode, do: :state_functions
+
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :permanent,
+      shutdown: 500
+    }
+  end
+
+  @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
+  def start_link(opts) do
+    :gen_statem.start_link({:global, __MODULE__}, __MODULE__, %{}, opts)
+  end
+
+  @impl true
+  def init(_) do
+    {:ok, :initializing, %{}, {:next_event, :internal, :initialize}}
+  end
+
+  def initializing(:internal, :initialize, _) do
+    {:ok, {access_token, user_id, snonce}} = Kevo.Api.ws_startup_config()
+
+    {:ok, conn} = :gun.open(~c"#{unikey_ws_url_base()}", 443, gun_ws_opts())
+    {:ok, :http} = :gun.await_up(conn, 5_000)
+
+    stream = :gun.ws_upgrade(conn, ws_location(access_token, snonce, user_id), [@user_agent])
+    {:upgrade, ["websocket"], _} = :gun.await(conn, stream, 5_000)
+
+    data = %{
+      conn: conn,
+      stream: stream
+    }
+
+    {:next_state, :connected, data}
+  end
+
+  def connected(:info, {:gun_ws, _worker, _stream, {:text, frame}}, _data) do
+    json = Jason.decode!(frame)
+
+    Logger.info([:ws_msg, json: json])
+
+    :keep_state_and_data
+  end
+
+  # websocket closed
+
+  def connected(:info, {:gun_ws, conn, stream, :close}, %{conn: conn, stream: stream}) do
+    Logger.info("websocket closed (unknown reason)")
+
+    {
+      :keep_state_and_data,
+      {:next_event, :internal, :reconnect}
+    }
+  end
+
+  def connected(:info, {:gun_ws, conn, _stream, {:close, errno, reason}}, %{conn: conn}) do
+    Logger.info("websocket closed (errno #{errno}, reason #{inspect(reason)})")
+
+    {
+      :keep_state_and_data,
+      {:next_event, :internal, :reconnect}
+    }
+  end
+
+  def connected(:info, {:gun_down, conn, _proto, _reason, _killed_streams}, %{conn: conn}) do
+    Logger.info("Lost complete shard connection. Attempting reconnect.")
+
+    {
+      :keep_state_and_data,
+      {:next_event, :internal, :reconnect}
+    }
+  end
+
+  # Internal event to force a complete reconnection from the connected state.
+  # Useful when the gateway told us to do so.
+  def connected(:internal, :reconnect, %{conn: conn} = data) do
+    :ok = :gun.close(conn)
+    :ok = :gun.flush(conn)
+
+    {
+      :next_state,
+      :initializing,
+      %{data | conn: nil, stream: nil},
+      {:next_event, :internal, :initialize}
     }
   end
 
   # need to call "/login" to get access token
-  defp ws_url(auth_token, server_nonce, user_id) do
+  defp ws_location(access_token, server_nonce, user_id) do
     client_nonce = client_nonce()
 
     query =
       URI.encode_query(%{
-        "Authorization" => "Bearer #{auth_token}",
+        "Authorization" => "Bearer #{access_token}",
         "X-unikey-context" => "web",
         "X-unikey-cnonce" => client_nonce,
         "X-unikey-nonce" => server_nonce,
@@ -30,15 +120,11 @@ defmodule Kevo.Socket do
 
     # may need to escape the following characters: !~*'()
 
-    "#{@unikey_ws_url_base}/v3/web/#{user_id}?#{query}"
+    "/v3/web/#{user_id}?#{query}"
   end
 
   # Generate the verification value used to connect to the websocket.
   defp ws_verification(client_nonce, server_nonce) do
-    :crypto.mac(:hmac, :sha512, Kevo.Api.client_secret(), client_nonce <> server_nonce)
-  end
-
-  defp client_nonce() do
-    Base.encode64(:crypto.strong_rand_bytes(64))
+    :crypto.mac(:hmac, :sha512, client_secret(), client_nonce <> server_nonce)
   end
 end

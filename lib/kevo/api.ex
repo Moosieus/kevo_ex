@@ -31,4 +31,8 @@ defmodule Kevo.Api do
   def unlock(lock_id) do
     GenServer.call(Kevo.Api.Client, {:unlock, lock_id})
   end
+
+  def ws_startup_config() do
+    GenServer.call(Kevo.Api.Client, :ws_init)
+  end
 end
