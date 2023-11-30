@@ -1,11 +1,17 @@
 defmodule Kevo.Api.Error do
   defexception [
-    :reason, # :network_error, :unexpected_status, :unexpected_body
-    :request, # map of request parameters
-    :response, # response received
-    :expected, # some expected value, status or header
-    :caused_by, # root error given
-    :step # interstitial step if applicable
+    # :network_error, :unexpected_status, :unexpected_body
+    :reason,
+    # map of request parameters
+    :request,
+    # response received
+    :response,
+    # some expected value, status or header
+    :expected,
+    # root error given
+    :caused_by,
+    # interstitial step if applicable
+    :step
   ]
 
   # network error
@@ -35,41 +41,45 @@ defmodule Kevo.Api.Error do
   end
 
   def from_network(request, error, step \\ nil) do
-    {:error, %__MODULE__{
-      reason: :network_error,
-      request: request,
-      caused_by: error,
-      step: step
-    }}
+    {:error,
+     %__MODULE__{
+       reason: :network_error,
+       request: request,
+       caused_by: error,
+       step: step
+     }}
   end
 
   def from_body(request, %Jason.DecodeError{} = error, step \\ nil) do
-    {:error, %__MODULE__{
-      reason: :unexpected_body,
-      request: request,
-      caused_by: error,
-      step: step
-    }}
+    {:error,
+     %__MODULE__{
+       reason: :unexpected_body,
+       request: request,
+       caused_by: error,
+       step: step
+     }}
   end
 
   def from_status(request, response, expected, step \\ nil) do
-    {:error, %__MODULE__{
-      reason: :unexpected_status,
-      request: request,
-      response: response,
-      expected: expected,
-      step: step
-    }}
+    {:error,
+     %__MODULE__{
+       reason: :unexpected_status,
+       request: request,
+       response: response,
+       expected: expected,
+       step: step
+     }}
   end
 
   def from_headers(request, response, expected, step \\ nil) do
-    {:error, %__MODULE__{
-      reason: :missing_header,
-      request: request,
-      response: response,
-      expected: expected,
-      step: step
-    }}
+    {:error,
+     %__MODULE__{
+       reason: :missing_header,
+       request: request,
+       response: response,
+       expected: expected,
+       step: step
+     }}
   end
 
   defp step_prefix(nil), do: ""

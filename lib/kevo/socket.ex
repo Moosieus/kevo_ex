@@ -11,7 +11,8 @@ defmodule Kevo.Socket do
 
   import Kevo.Common
 
-  @user_agent {"User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
+  @user_agent {"User-Agent",
+               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
 
   @impl true
   def callback_mode, do: :state_functions
@@ -77,7 +78,9 @@ defmodule Kevo.Socket do
   end
 
   def connected(:info, {:gun_ws, conn, _stream, {:close, errno, reason}}, %{conn: conn}) do
-    Logger.debug("websocket closed (errno #{errno}, reason #{inspect(reason)})", state: :connected)
+    Logger.debug("websocket closed (errno #{errno}, reason #{inspect(reason)})",
+      state: :connected
+    )
 
     {
       :keep_state_and_data,

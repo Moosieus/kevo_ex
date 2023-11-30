@@ -48,7 +48,7 @@ defmodule Kevo.Common do
         depth: 3,
         customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
       ],
-      retry: 0,
+      retry: 0
     }
   end
 
@@ -65,7 +65,7 @@ defmodule Kevo.Common do
         depth: 3,
         customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
       ],
-      retry: 1_000_000_000,
+      retry: 1_000_000_000
     }
   end
 end

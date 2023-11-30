@@ -64,7 +64,7 @@ defmodule Kevo.Api.Client do
     device_id = UUID.uuid4()
     auth_url = auth_url(code_challenge, device_id)
 
-    with {:ok, conn} <- :gun.open('#{unikey_login_url_base()}', 443, gun_opts()),
+    with {:ok, conn} <- :gun.open(~c"#{unikey_login_url_base()}", 443, gun_opts()),
          {:ok, _} <- :gun.await_up(conn),
          {:ok, login_page_url} <- get_login_url(conn, auth_url),
          {:ok, login_form, cookies} <- get_login_page(conn, login_page_url),
@@ -330,7 +330,9 @@ defmodule Kevo.Api.Client do
 
   # postpone calls while connecting
   def connecting({:call, from}, request, _data) do
-    Logger.debug("postpone #{inspect(request)} call from #{inspect(from)} while connecting", state: :connecting)
+    Logger.debug("postpone #{inspect(request)} call from #{inspect(from)} while connecting",
+      state: :connecting
+    )
 
     {:keep_state_and_data, :postpone}
   end
