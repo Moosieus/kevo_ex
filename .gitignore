@@ -27,3 +27,6 @@ kevo_ex-*.tar
 
 # Elixir language server.
 .elixir_ls
+
+# Development configuration
+/config/

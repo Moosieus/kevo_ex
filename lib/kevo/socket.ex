@@ -37,6 +37,8 @@ defmodule Kevo.Socket do
   end
 
   def initializing(:internal, :initialize, _) do
+    Logger.debug("opening websocket", state: :initializing)
+
     {:ok, {access_token, user_id, snonce}} = Kevo.Api.ws_startup_config()
 
     {:ok, conn} = :gun.open(~c"#{unikey_ws_url_base()}", 443, gun_ws_opts())
@@ -50,13 +52,15 @@ defmodule Kevo.Socket do
       stream: stream
     }
 
+    Logger.debug("websocket connection established.", state: :initializing)
+
     {:next_state, :connected, data}
   end
 
   def connected(:info, {:gun_ws, _worker, _stream, {:text, frame}}, _data) do
     json = Jason.decode!(frame)
 
-    Logger.info([:ws_msg, json: json])
+    Logger.debug(json, state: :connected)
 
     :keep_state_and_data
   end
@@ -64,7 +68,7 @@ defmodule Kevo.Socket do
   # websocket closed
 
   def connected(:info, {:gun_ws, conn, stream, :close}, %{conn: conn, stream: stream}) do
-    Logger.info("websocket closed (unknown reason)")
+    Logger.debug("websocket closed (unknown reason)", state: :connected)
 
     {
       :keep_state_and_data,
@@ -73,7 +77,7 @@ defmodule Kevo.Socket do
   end
 
   def connected(:info, {:gun_ws, conn, _stream, {:close, errno, reason}}, %{conn: conn}) do
-    Logger.info("websocket closed (errno #{errno}, reason #{inspect(reason)})")
+    Logger.debug("websocket closed (errno #{errno}, reason #{inspect(reason)})", state: :connected)
 
     {
       :keep_state_and_data,
@@ -82,7 +86,7 @@ defmodule Kevo.Socket do
   end
 
   def connected(:info, {:gun_down, conn, _proto, _reason, _killed_streams}, %{conn: conn}) do
-    Logger.info("Lost complete shard connection. Attempting reconnect.")
+    Logger.debug("Lost complete shard connection. Attempting reconnect.", state: :connected)
 
     {
       :keep_state_and_data,
@@ -93,6 +97,8 @@ defmodule Kevo.Socket do
   # Internal event to force a complete reconnection from the connected state.
   # Useful when the gateway told us to do so.
   def connected(:internal, :reconnect, %{conn: conn} = data) do
+    Logger.debug("reconnecting", state: :connected)
+
     :ok = :gun.close(conn)
     :ok = :gun.flush(conn)
 

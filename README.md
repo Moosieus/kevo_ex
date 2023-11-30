@@ -36,6 +36,7 @@ be found at <https://hexdocs.pm/kevo_ex>.
 
 ## Dev Usage
 ```elixir
+Logger.configure(level: :debug)
 Logger.add_translator({Kevo.StateMachineTranslator, :translate})
 Kevo.Api.Client.start_link(username: "", password: "")
 Kevo.Api.get_locks()

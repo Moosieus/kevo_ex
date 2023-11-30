@@ -51,13 +51,11 @@ defmodule Kevo.Api.Client do
       password: password!(opts)
     }
 
-    :gen_statem.start_link({:global, __MODULE__}, __MODULE__, config, opts)
+    :gen_statem.start_link({:local, __MODULE__}, __MODULE__, config, opts)
   end
 
   @impl true
   def init(data) do
-    Logger.info("Kickoff!")
-
     {:ok, :initializing, data, [{:next_event, :internal, :initialize}]}
   end
 
@@ -282,14 +280,14 @@ defmodule Kevo.Api.Client do
 
   ## State Machine
 
-  def initializing(:internal, :initialize, %Data{} = data) do
-    Logger.info("Initializing Kevo API client...")
-    with {:ok, %Auth{} = auth} <- login(data.username, data.password) do
-      Logger.info("Logged in.")
+  def initializing(:internal, :initialize, %{username: username, password: password}) do
+    Logger.debug("performing login", state: :initializing)
+
+    with {:ok, %Auth{} = auth} <- login(username, password) do
       {:next_state, :disconnected,
        %Data{
-         :username => data.username,
-         :password => data.password,
+         :username => username,
+         :password => password,
          :access_token => auth.access_token,
          :id_token => auth.id_token,
          :refresh_token => auth.refresh_token,
@@ -304,9 +302,11 @@ defmodule Kevo.Api.Client do
 
   # wake from rest
   def disconnected({:call, _from}, _request, %Data{} = data) do
+    Logger.debug("got query, opening connection", state: :disconnected)
+
     {:next_state, :connecting, data,
      [
-       {:next_event, :internal, :open, data},
+       {:next_event, :internal, :open},
        {:state_timeout, :timer.seconds(10), :connect_timeout},
        :postpone
      ]}
@@ -314,29 +314,38 @@ defmodule Kevo.Api.Client do
 
   # startup from rest
   def connecting(:internal, :open, %Data{} = data) do
-    {:ok, api_conn} = :gun.open(~c"#{unikey_api_url_base()}", 443, gun_opts())
-    {:ok, _} = :gun.await_up(api_conn)
+    Logger.debug("opening Kevo API connection", state: :connecting)
 
-    {:keep_state, %{data | api_conn: api_conn}}
+    {:ok, api_conn} = :gun.open(~c"#{unikey_api_url_base()}", 443, gun_opts())
+
+    {:keep_state, %Data{data | api_conn: api_conn}}
   end
 
   # connection established -> connected
   def connecting(:info, {:gun_up, conn_pid, _}, %{api_conn: conn_pid} = data) do
+    Logger.debug("gun established connection", state: :connecting)
+
     {:next_state, :connected, data}
   end
 
   # postpone calls while connecting
-  def connecting({:call, _from}, _request, _data) do
+  def connecting({:call, from}, request, _data) do
+    Logger.debug("postpone #{inspect(request)} call from #{inspect(from)} while connecting", state: :connecting)
+
     {:keep_state_and_data, :postpone}
   end
 
   # connecting timeout
   def connecting(:state_timeout, :connect_timeout, _data) do
+    Logger.debug("state transition", state: :connected)
+
     {:stop, :connect_timeout}
   end
 
   # special case when websocket has to start
   def connected({:call, from}, :ws_init, %Data{} = data) do
+    Logger.debug("retreiving websocket init data", state: :connected)
+
     %Data{
       access_token: access_token,
       user_id: user_id
@@ -356,6 +365,8 @@ defmodule Kevo.Api.Client do
 
   # open for business
   def connected({:call, from}, call, %Data{} = data) do
+    Logger.debug("processing call: #{call}", state: :connected)
+
     %{
       access_token: access_token,
       api_conn: api_conn
@@ -372,12 +383,22 @@ defmodule Kevo.Api.Client do
   end
 
   # connection dropped
-  def connected(:info, {:gun_down, conn, _, _, _}, %Data{} = data) do
+  def connected(:info, {:gun_down, conn, _, reason, _}, %Data{} = data) do
+    Logger.debug("Kevo API connection closed: #{inspect(reason)}", state: :connected)
+
     # stop gun from reopening connection
     :ok = :gun.close(conn)
     :ok = :gun.flush(conn)
 
     {:next_state, :disconnected, %{data | api_conn: nil}}
+  end
+
+  def connected(:info, {:gun_data, _conn, _stream, _fin, _body}, _data) do
+    Logger.debug("gun_data but we await, so just eat the message.", state: :connected)
+
+    # I'll have to refactor this to work concurrently later, given gun's gonna do this anyway.
+
+    :keep_state_and_data
   end
 
   ## REST API Calls
