@@ -30,3 +30,5 @@ kevo_ex-*.tar
 
 # Development configuration
 /config/
+
+.env

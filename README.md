@@ -4,15 +4,12 @@ An Elixir client library for Kevo's reverse engineered web API.
 Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikely to receive support for [Seam](https://www.seam.co/), the existing web API should (hopefully) remain (relatively) stable.
 
 ## Todo
-- Convert library to an application
-- Implement Websocket Behaviour
-- Implement top-level Supervisor
-- Expose more config options
-- Document everything
-- Write tests (will need mocking)
-- Struct-type the responses or provide documented examples
-
-*Presently using Finch for the API but may switch entirely to `:gun`...*
+- Implement websocket callback
+- Document possible API and websocket responses
+- Add function and module docs
+- Figure out where to add the log translator
+- Use structured logging + format callbacks
+- Refactor `Kevo.Client.Api` to process messages concurrently
 
 ## Installation
 `kevo_ex` is a work in progress and isn't yet available on hex.

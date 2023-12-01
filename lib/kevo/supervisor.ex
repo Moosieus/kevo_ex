@@ -10,13 +10,11 @@ defmodule Kevo.Supervisor do
   end
 
   @impl true
-  def init({username, password}) do
-    # Logger.configure(level: :debug)
-    # Logger.add_translator({Kevo.StateMachineTranslator, :translate})
+  def init({username, password, websocket_callback}) do
 
     children = [
       {Kevo.Api.Client, username: username, password: password, name: Kevo.Api.Client},
-      {Kevo.Socket, name: Kevo.Socket}
+      {Kevo.Socket, name: Kevo.Socket, ws_cb: websocket_callback}
     ]
 
     Supervisor.init(children, strategy: :one_for_all)

@@ -513,6 +513,8 @@ defmodule Kevo.Api.Client do
     end
   end
 
+  ## Network calling functions
+
   # Checks if a new refresh token is needed and obtains it if needed.
   defp check_refresh(state) do
     %{
@@ -601,7 +603,7 @@ defmodule Kevo.Api.Client do
     end
   end
 
-  ## Helpers
+  ## Static functions
 
   defp headers(access_token, server_nonce) do
     [
@@ -679,7 +681,7 @@ defmodule Kevo.Api.Client do
     |> :binary.encode_unsigned(:big)
   end
 
-  ## Config helpers
+  ## Configuration functions
 
   defp username!(opts) do
     Keyword.get(opts, :username) || raise(ArgumentError, "must supply a username")
@@ -687,5 +689,10 @@ defmodule Kevo.Api.Client do
 
   defp password!(opts) do
     Keyword.get(opts, :password) || raise(ArgumentError, "must supply a password")
+  end
+
+  @doc false
+  def __format_cb__(%{state: :closed, reason: reason}) do
+    {"Kevo API connection closed: ~p", [reason]}
   end
 end

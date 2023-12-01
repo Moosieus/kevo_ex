@@ -29,15 +29,19 @@ defmodule Kevo.Socket do
 
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
-    :gen_statem.start_link({:global, __MODULE__}, __MODULE__, %{}, opts)
+    config = %{
+      ws_cb: websocket_callback!(opts)
+    }
+
+    :gen_statem.start_link({:global, __MODULE__}, __MODULE__, config, opts)
   end
 
   @impl true
-  def init(_) do
-    {:ok, :initializing, %{}, {:next_event, :internal, :initialize}}
+  def init(config) do
+    {:ok, :initializing, config, {:next_event, :internal, :initialize}}
   end
 
-  def initializing(:internal, :initialize, _) do
+  def initializing(:internal, :initialize, %{ws_cb: ws_cb} = _data) do
     Logger.debug("opening websocket", state: :initializing)
 
     {:ok, {access_token, user_id, snonce}} = Kevo.Api.ws_startup_config()
@@ -50,7 +54,8 @@ defmodule Kevo.Socket do
 
     data = %{
       conn: conn,
-      stream: stream
+      stream: stream,
+      ws_cb: ws_cb
     }
 
     Logger.debug("websocket connection established.", state: :initializing)
@@ -58,17 +63,18 @@ defmodule Kevo.Socket do
     {:next_state, :connected, data}
   end
 
-  def connected(:info, {:gun_ws, _worker, _stream, {:text, frame}}, _data) do
-    json = Jason.decode!(frame)
+  def connected(:info, {:gun_ws, _worker, _stream, {:text, frame}}, %{ws_cb: websocket_callback} =  _data) do
+    Logger.debug("got websocket message", state: :connected)
 
-    Logger.debug(json, state: :connected)
+    Logger.info([msg: "websocket message", json: Jason.decode!(frame)])
+    # |> websocket_callback.()
 
     :keep_state_and_data
   end
 
   # websocket closed
 
-  def connected(:info, {:gun_ws, conn, stream, :close}, %{conn: conn, stream: stream}) do
+  def connected(:info, {:gun_ws, conn, stream, :close}, %{conn: conn, stream: stream} = _data) do
     Logger.debug("websocket closed (unknown reason)", state: :connected)
 
     {
@@ -77,7 +83,7 @@ defmodule Kevo.Socket do
     }
   end
 
-  def connected(:info, {:gun_ws, conn, _stream, {:close, errno, reason}}, %{conn: conn}) do
+  def connected(:info, {:gun_ws, conn, _stream, {:close, errno, reason}}, %{conn: conn} = _data) do
     Logger.debug("websocket closed (errno #{errno}, reason #{inspect(reason)})",
       state: :connected
     )
@@ -88,7 +94,7 @@ defmodule Kevo.Socket do
     }
   end
 
-  def connected(:info, {:gun_down, conn, _proto, _reason, _killed_streams}, %{conn: conn}) do
+  def connected(:info, {:gun_down, conn, _proto, _reason, _killed_streams}, %{conn: conn} = _data) do
     Logger.debug("Lost complete shard connection. Attempting reconnect.", state: :connected)
 
     {
@@ -135,5 +141,11 @@ defmodule Kevo.Socket do
   # Generate the verification value used to connect to the websocket.
   defp ws_verification(client_nonce, server_nonce) do
     :crypto.mac(:hmac, :sha512, client_secret(), client_nonce <> server_nonce)
+  end
+
+  ## Configuration options
+
+  defp websocket_callback!(opts) do
+    Keyword.get(opts, :ws_cb) || raise(ArgumentError, "must supply a websocket callback")
   end
 end
