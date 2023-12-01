@@ -7,8 +7,9 @@ Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikel
 - Implement websocket callback
 - Document possible API and websocket responses
 - Add function and module docs
-- Figure out where to add the log translator
 - Use structured logging + format callbacks
+  - Provide a format callback in the metadata (straightforward enough...)
+  - Where do I add the 'middleware' to call said callback? (Maybe `Logger.Translator`)
 - Refactor `Kevo.Client.Api` to process messages concurrently
 
 ## Installation

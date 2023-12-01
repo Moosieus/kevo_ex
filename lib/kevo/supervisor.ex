@@ -14,7 +14,7 @@ defmodule Kevo.Supervisor do
 
     children = [
       {Kevo.Api.Client, username: username, password: password, name: Kevo.Api.Client},
-      {Kevo.Socket, name: Kevo.Socket, ws_cb: websocket_callback}
+      {Kevo.Socket, name: Kevo.Socket, callback_module: websocket_callback}
     ]
 
     Supervisor.init(children, strategy: :one_for_all)

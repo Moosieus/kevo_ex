@@ -30,7 +30,7 @@ defmodule Kevo.Socket do
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
     config = %{
-      ws_cb: websocket_callback!(opts)
+      callback_module: callback_module!(opts)
     }
 
     :gen_statem.start_link({:global, __MODULE__}, __MODULE__, config, opts)
@@ -41,7 +41,7 @@ defmodule Kevo.Socket do
     {:ok, :initializing, config, {:next_event, :internal, :initialize}}
   end
 
-  def initializing(:internal, :initialize, %{ws_cb: ws_cb} = _data) do
+  def initializing(:internal, :initialize, %{callback_module: callback_module} = _data) do
     Logger.debug("opening websocket", state: :initializing)
 
     {:ok, {access_token, user_id, snonce}} = Kevo.Api.ws_startup_config()
@@ -55,7 +55,7 @@ defmodule Kevo.Socket do
     data = %{
       conn: conn,
       stream: stream,
-      ws_cb: ws_cb
+      callback_module: callback_module
     }
 
     Logger.debug("websocket connection established.", state: :initializing)
@@ -63,11 +63,17 @@ defmodule Kevo.Socket do
     {:next_state, :connected, data}
   end
 
-  def connected(:info, {:gun_ws, _worker, _stream, {:text, frame}}, %{ws_cb: websocket_callback} =  _data) do
+  def connected(
+        :info,
+        {:gun_ws, _worker, _stream, {:text, frame}},
+        %{callback_module: callback_module} = _data
+      ) do
     Logger.debug("got websocket message", state: :connected)
 
-    Logger.info([msg: "websocket message", json: Jason.decode!(frame)])
-    # |> websocket_callback.()
+    # Logger.info(msg: "websocket message", frame: frame)
+
+    Jason.decode!(frame)
+    |> callback_module.handle_event()
 
     :keep_state_and_data
   end
@@ -145,7 +151,7 @@ defmodule Kevo.Socket do
 
   ## Configuration options
 
-  defp websocket_callback!(opts) do
-    Keyword.get(opts, :ws_cb) || raise(ArgumentError, "must supply a websocket callback")
+  defp callback_module!(opts) do
+    Keyword.get(opts, :callback_module) || raise(ArgumentError, "must supply a websocket callback")
   end
 end
