@@ -13,6 +13,8 @@ defmodule Kevo.StateMachineTranslator do
 
   # https://github.com/elixir-lang/elixir/blob/d30c5c0185607f08797441ab8af12636ad8dbd7e/lib/logger/lib/logger/translator.ex#L39
   def translate(min_level, :error, :report, {:logger, %{label: label} = report}) do
+    IO.inspect(report, label: "Report")
+
     case label do
       {:gen_statem, :terminate} ->
         report_gen_statem_terminate(min_level, report)

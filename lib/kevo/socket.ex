@@ -152,6 +152,7 @@ defmodule Kevo.Socket do
   ## Configuration options
 
   defp callback_module!(opts) do
-    Keyword.get(opts, :callback_module) || raise(ArgumentError, "must supply a websocket callback")
+    Keyword.get(opts, :callback_module) ||
+      raise(ArgumentError, "must supply a websocket callback")
   end
 end

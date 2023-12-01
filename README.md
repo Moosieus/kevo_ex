@@ -4,8 +4,8 @@ An Elixir client library for Kevo's reverse engineered web API.
 Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikely to receive support for [Seam](https://www.seam.co/), the existing web API should (hopefully) remain (relatively) stable.
 
 ## Todo
-- Implement websocket callback
-- Document possible API and websocket responses
+- Evaluate improving websocket API
+- Diagnose websocket quietly dropping
 - Add function and module docs
 - Use structured logging + format callbacks
   - Provide a format callback in the metadata (straightforward enough...)
@@ -32,10 +32,13 @@ and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
 be found at <https://hexdocs.pm/kevo_ex>.
 -->
 
-## Dev Usage
+## Usage
+
+Add Kevo
+
 ```elixir
 Logger.configure(level: :debug)
-Logger.add_translator({Kevo.StateMachineTranslator, :translate})
+Logger.add_translator({Kevo.StateMachineTranslator, :translate}) 
 Kevo.Api.Client.start_link(username: "", password: "")
 Kevo.Api.get_locks()
 ```

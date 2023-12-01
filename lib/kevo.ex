@@ -1,6 +1,8 @@
-defmodule Kevo.Supervisor do
+defmodule Kevo do
   @moduledoc """
-  Root supervisor for all the processes required to communicate with Kevo.
+  Top-level supervisor for all the processes required to communicate with Kevo.
+
+  For API calls and websocket events, see `Kevo.Api` and `Kevo.Socket` respectively.
   """
   use Supervisor
 
@@ -11,7 +13,6 @@ defmodule Kevo.Supervisor do
 
   @impl true
   def init({username, password, websocket_callback}) do
-
     children = [
       {Kevo.Api.Client, username: username, password: password, name: Kevo.Api.Client},
       {Kevo.Socket, name: Kevo.Socket, callback_module: websocket_callback}
