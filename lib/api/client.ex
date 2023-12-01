@@ -367,7 +367,7 @@ defmodule Kevo.Api.Client do
 
   # open for business
   def connected({:call, from}, call, %Data{} = data) do
-    Logger.debug("processing call: #{call}", state: :connected)
+    Logger.debug(%{from: from, call: call, state: :connected, data: data}, format_cb: nil)
 
     %{
       access_token: access_token,
@@ -452,6 +452,7 @@ defmodule Kevo.Api.Client do
          {:ok, body} <- :gun.await_body(conn, stream_ref) do
       case Jason.decode(body) do
         {:ok, %{"locks" => locks}} ->
+          Logger.info(body)
           {:ok, locks}
 
         {:error, error} ->
@@ -476,6 +477,7 @@ defmodule Kevo.Api.Client do
     with {:response, :nofin, 200, _} <- :gun.await(conn, stream_ref),
          {:ok, body} = :gun.await_body(conn, stream_ref),
          {:ok, events} <- Jason.decode(body) do
+      Logger.info(body)
       {:ok, events}
     else
       {:response, _, status, headers} ->

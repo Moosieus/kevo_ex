@@ -14,6 +14,15 @@ defmodule Kevo.Api.Error do
     :step
   ]
 
+  @type t :: %Kevo.Api.Error{
+          reason: :network_error | :unexpected_status | :unexpected_body,
+          request: map(),
+          response: any(),
+          expected: integer() | list({String.t(), String.t()}),
+          caused_by: any(),
+          step: {function :: String.t(), arity :: integer()}
+        }
+
   # network error
   def message(%__MODULE__{reason: :network_error} = err) do
     step_prefix(err.step) <> "network error: #{inspect(err.caused_by)}"
