@@ -1,8 +1,6 @@
 defmodule Kevo do
   @moduledoc """
-  Top-level supervisor for all the processes required to communicate with Kevo.
-
-  For API calls and websocket events, see `Kevo.Api` and `Kevo.Socket` respectively.
+  Todo: Write some nice documentation here :)
   """
   use Supervisor
 
@@ -20,4 +18,32 @@ defmodule Kevo do
 
     Supervisor.init(children, strategy: :one_for_all)
   end
+
+  @doc """
+  Retrieves all locks visible to the logged in user.
+  """
+  defdelegate get_locks(), to: Kevo.Api
+
+  @doc """
+  Retrieves the given lock's state.
+  """
+  @spec get_lock(String.t()) :: {:ok, any()} | {:error, Kevo.Api.Error.t()}
+  defdelegate get_lock(lock_id), to: Kevo.Api
+
+  @doc """
+  Locks the given lock.
+  """
+  @spec lock(String.t()) :: :ok | {:error, Kevo.Api.Error.t()}
+  defdelegate lock(lock_id), to: Kevo.Api
+
+  @doc """
+  Unlocks the given lock.
+  """
+  @spec unlock(String.t()) :: :ok | {:error, Kevo.Api.Error.t()}
+  defdelegate unlock(lock_id), to: Kevo.Api
+
+  @doc """
+  Gets the provided lock's event history. Follows the frontend's paging behavior.
+  """
+  defdelegate get_events(lock_id, page \\ 1, page_size \\ 10), to: Kevo.Api
 end
