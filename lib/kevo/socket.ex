@@ -17,16 +17,6 @@ defmodule Kevo.Socket do
   @impl true
   def callback_mode, do: :state_functions
 
-  def child_spec(opts) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, [opts]},
-      type: :worker,
-      restart: :permanent,
-      shutdown: 500
-    }
-  end
-
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
     config = %{
@@ -40,6 +30,8 @@ defmodule Kevo.Socket do
   def init(config) do
     {:ok, :initializing, config, {:next_event, :internal, :initialize}}
   end
+
+  ## State Machine
 
   def initializing(:internal, :initialize, %{callback_module: callback_module} = _data) do
     Logger.debug("opening websocket", state: :initializing)
@@ -149,7 +141,17 @@ defmodule Kevo.Socket do
     :crypto.mac(:hmac, :sha512, client_secret(), client_nonce <> server_nonce)
   end
 
-  ## Configuration options
+  ## Configuration
+
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :permanent,
+      shutdown: 500
+    }
+  end
 
   defp callback_module!(opts) do
     Keyword.get(opts, :callback_module) ||

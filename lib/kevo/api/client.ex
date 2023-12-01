@@ -34,21 +34,11 @@ defmodule Kevo.Api.Client do
   @impl true
   def callback_mode, do: :state_functions
 
-  def child_spec(opts) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, [opts]},
-      type: :worker,
-      restart: :transient,
-      shutdown: 500
-    }
-  end
-
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
     config = %{
-      username: username!(opts),
-      password: password!(opts)
+      username: Keyword.fetch!(opts, :username),
+      password: Keyword.fetch!(opts, :password)
     }
 
     :gen_statem.start_link({:local, __MODULE__}, __MODULE__, config, opts)
@@ -683,18 +673,20 @@ defmodule Kevo.Api.Client do
     |> :binary.encode_unsigned(:big)
   end
 
-  ## Configuration functions
-
-  defp username!(opts) do
-    Keyword.get(opts, :username) || raise(ArgumentError, "must supply a username")
-  end
-
-  defp password!(opts) do
-    Keyword.get(opts, :password) || raise(ArgumentError, "must supply a password")
-  end
-
   @doc false
   def __format_cb__(%{state: :closed, reason: reason}) do
     {"Kevo API connection closed: ~p", [reason]}
+  end
+
+  ## Configuration
+
+  def child_spec(opts) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :transient,
+      shutdown: 500
+    }
   end
 end

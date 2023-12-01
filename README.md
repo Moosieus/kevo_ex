@@ -7,10 +7,11 @@ Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikel
 - Evaluate improving websocket API
 - Diagnose websocket quietly dropping
 - Add function and module docs
-- Use structured logging + format callbacks
+- Use structured logging with format callback functions
   - Provide a format callback in the metadata (straightforward enough...)
   - Where do I add the 'middleware' to call said callback? (Maybe `Logger.Translator`)
-- Refactor `Kevo.Client.Api` to process messages concurrently
+  - Translator should only affect this application and none others
+- Refactor `Kevo.Api.Client` to process messages concurrently
 
 ## Installation
 `kevo_ex` is a work in progress and isn't yet available on hex.
@@ -33,12 +34,16 @@ be found at <https://hexdocs.pm/kevo_ex>.
 -->
 
 ## Usage
-
-Add Kevo
+Add Kevo to your supervision tree:
+```elixir
+children = [
+  {Kevo, [name: Kevo, username: "username", password: "password", websocket_callback: CallbackModule]}
+]
+```
 
 ```elixir
 Logger.configure(level: :debug)
-Logger.add_translator({Kevo.StateMachineTranslator, :translate}) 
+Logger.add_translator({Kevo.StateMachineTranslator, :translate})
 Kevo.Api.Client.start_link(username: "", password: "")
 Kevo.Api.get_locks()
 ```

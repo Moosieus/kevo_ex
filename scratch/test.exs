@@ -6,16 +6,16 @@ defmodule TestCallback do
   # @impl true
   def handle_event(json) do
     Logger.info("GOT THE JSON :D")
-    Logger.info(json)
+    IO.inspect(json, label: "websocket message, Jason decoded.")
   end
 end
-
 
 Logger.configure(level: :debug)
 Logger.add_translator({Kevo.StateMachineTranslator, :translate})
 
-Kevo.Supervisor.start_link({
-  System.get_env("KEVO_USER"),
-  System.get_env("KEVO_PASSWORD"),
-  TestCallback}
-)
+Kevo.start_link([
+  name: Kevo,
+  username: System.get_env("KEVO_USER"),
+  password: System.get_env("KEVO_PASSWORD"),
+  ws_callback_module: TestCallback
+])
