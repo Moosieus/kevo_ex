@@ -1,4 +1,4 @@
-defmodule GetLock do
+defmodule Kevo.Api.Queries.Getlock do
   alias Kevo.Api.Error, as: Err
 
   def request(lock_id) do

@@ -1,4 +1,4 @@
-defmodule SendCommand do
+defmodule Kevo.Api.Queries.Sendcommand do
   alias Kevo.Api.Error, as: Err
 
   # specifies request data

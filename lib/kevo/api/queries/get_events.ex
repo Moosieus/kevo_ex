@@ -1,4 +1,4 @@
-defmodule GetEvents do
+defmodule Kevo.Api.Queries.Getevents do
   alias Kevo.Api.Error, as: Err
 
   def request(lock_id, page, page_size) do

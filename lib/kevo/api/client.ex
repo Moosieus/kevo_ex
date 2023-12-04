@@ -351,33 +351,20 @@ defmodule Kevo.Api.Client do
     Logger.debug("retreiving websocket init data", state: :connected)
 
     %Data{
-      api_conn: api_conn,
       access_token: access_token,
-      user_id: user_id,
-      streams: streams
+      user_id: user_id
     } = data
 
-    request = GetServerNonce.request()
-    {verb, location, headers, body} = request
+    reply =
+      case get_server_nonce(data.api_conn) do
+        {:ok, snonce} ->
+          {:ok, {access_token, user_id, snonce}}
 
-    stream_ref = :gun.request(api_conn, verb, location, headers, body)
+        {:error, error} ->
+          {:error, error}
+      end
 
-    streams =
-      Map.put(streams, stream_ref, %StreamData{
-        from: from,
-        request: request,
-        callback: fn r, s, h, b ->
-          case GetServerNonce.handle(r, s, h, b) do
-            {:ok, snonce} ->
-              {:ok, {access_token, user_id, snonce}}
-
-            {:error, error} ->
-              {:error, error}
-          end
-        end
-      })
-
-    {:keep_state, %{data | streams: streams}}
+    {:keep_state, data, [{:reply, from, reply}]}
   end
 
   # open for business
@@ -591,6 +578,8 @@ defmodule Kevo.Api.Client do
 
     case :gun.await(conn, stream_ref) do
       {:response, :nofin, 201, res_headers} = response ->
+        # Consume the rest of the response
+        :gun.await_body(conn, stream_ref)
         case List.keyfind(res_headers, "x-unikey-nonce", 0) do
           {"x-unikey-nonce", server_nonce} ->
             {:ok, server_nonce}
@@ -599,7 +588,7 @@ defmodule Kevo.Api.Client do
             Error.from_headers(request, response, 201, __ENV__.function)
         end
 
-      {:response, _, _, _} = response ->
+      {:response, :fin, _, _} = response ->
         Error.from_status(request, response, 201, __ENV__.function)
 
       {:error, error} ->

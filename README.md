@@ -3,6 +3,10 @@ An Elixir client library for Kevo's reverse engineered web API.
 
 Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikely to receive support for [Seam](https://www.seam.co/), the existing web API should (hopefully) remain (relatively) stable.
 
+- Evaluate if the concurrent API is worth keeping
+- Fix the query module paths I just broke
+- *See if this can't be done any cleaner*
+
 ## Todo Before `0.1.0`
 - Improve websocket API
 - Diagnose websocket quietly dropping
