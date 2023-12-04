@@ -6,6 +6,7 @@ Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikel
 ## Installation
 Add `:kevo_ex` to your list of dependencies in `mix.exs`:
 
+<!-- BEGIN: VERSION -->
 ```elixir
 def deps do
   [
@@ -13,6 +14,7 @@ def deps do
   ]
 end
 ```
+<!-- END: VERSION -->
 
 Documentation is available on [HexDocs](https://hexdocs.pm/kevo_ex/readme.html) and may also be generated with [ExDoc](https://github.com/elixir-lang/ex_doc).
 

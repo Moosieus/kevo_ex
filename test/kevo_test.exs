@@ -2,7 +2,5 @@ defmodule KevoTest do
   use ExUnit.Case
   doctest Kevo
 
-  test "greets the world" do
-    assert Kevo.hello() == :world
-  end
+  # Need considerable mocking for tests, working on getting stuff working for now.
 end
