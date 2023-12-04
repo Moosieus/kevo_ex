@@ -1,13 +1,19 @@
 defmodule Kevo.MixProject do
   use Mix.Project
 
+  @version "0.1.0"
+  @source_url "https://github.com/Moosieus/elixir-a2s"
+
   def project do
     [
       app: :kevo_ex,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      description: "An Elixir client library for Kevo's reverse engineered web API.",
+      deps: deps(),
+      docs: docs(),
+      package: package()
     ]
   end
 
@@ -30,6 +36,37 @@ defmodule Kevo.MixProject do
       {:credo, "~> 1.4", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.1", only: [:dev], runtime: false},
       {:certifi, "~> 2.12"}
+    ]
+  end
+
+  defp docs do
+    [
+      name: "Kevo_ex",
+      source_url: @source_url,
+      homepage_url: @source_url,
+      main: "readme",
+      source_ref: "main",
+      extras: [
+        "README.md",
+        "pages/example_responses.md"
+      ],
+      groups_for_modules: [
+        "Developer Interface": [
+          Kevo,
+          Kevo.Handler
+        ],
+        "Exceptions": [
+          Kevo.ApiError
+        ]
+      ]
+    ]
+  end
+
+  defp package do
+    [
+      name: "elixir_a2s",
+      licenses: ["MIT"],
+      links: %{"GitHub" => @source_url}
     ]
   end
 end

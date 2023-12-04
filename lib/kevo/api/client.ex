@@ -1,24 +1,35 @@
 defmodule Kevo.Api.Client do
-  @moduledoc """
-  A state machine that handles the authentication and connection to Kevo's HTTP API.
+  @moduledoc false
 
-  HTTP requests sent by this client are blocking for now.
-  This could be revisited one day, but for now I don't want perfect to be the enemy of good.
-  """
+  # A state machine that handles the authentication and connection to Kevo's HTTP/2 API.
+  # Tries to be as non-blocking as possible while also ensuring correctness.
+
   @behaviour :gen_statem
 
   require Logger
 
   import Kevo.Common
 
+  alias Kevo.ApiError, as: Error
+
   alias Kevo.Api.{
     Auth,
     Refresh,
-    Request,
-    Error
+    Request
+  }
+
+  alias Kevo.Api.Queries.{
+    Getevents,
+    Getlock,
+    Getlocks,
+    Sendcommand
   }
 
   defmodule Data do
+    @moduledoc false
+
+    # Persistent data used by `Kevo.Api.Client` between callbacks.
+
     defstruct [
       :username,
       :password,
@@ -33,6 +44,10 @@ defmodule Kevo.Api.Client do
   end
 
   defmodule StreamData do
+    @moduledoc false
+
+    # A set of fields related to handling HTTP/2 stream data (as received from gun).
+
     defstruct [
       :from,
       :request,
@@ -61,6 +76,7 @@ defmodule Kevo.Api.Client do
     {:ok, :initializing, data, [{:next_event, :internal, :initialize}]}
   end
 
+  # obtain authentication (blocking)
   defp login(username, password) do
     {code_verifier, code_challenge} = Kevo.Pkce.generate_pkce_pair()
     device_id = UUID.uuid4()
@@ -90,7 +106,7 @@ defmodule Kevo.Api.Client do
     end
   end
 
-  # Login sub-functions
+  # Login sub-functions (blocking)
 
   defp auth_url(code_challenge, device_uuid4) do
     certificate = generate_certificate(device_uuid4)
@@ -117,7 +133,7 @@ defmodule Kevo.Api.Client do
   end
 
   defp get_login_url(conn, auth_url) do
-    request = %Request{method: "GET", location: auth_url}
+    request = %Request{method: "GET", path: auth_url}
     stream_ref = :gun.get(conn, ~c"#{auth_url}")
 
     case :gun.await(conn, stream_ref) do
@@ -136,7 +152,7 @@ defmodule Kevo.Api.Client do
   end
 
   defp get_login_page(conn, login_page_url) do
-    request = %Request{method: "GET", location: login_page_url}
+    request = %Request{method: "GET", path: login_page_url}
     stream_ref = :gun.get(conn, login_page_url)
 
     case :gun.await(conn, stream_ref) do
@@ -188,7 +204,7 @@ defmodule Kevo.Api.Client do
 
     request = %Request{
       method: "POST",
-      location: location,
+      path: location,
       headers: req_headers,
       body: body
     }
@@ -211,7 +227,7 @@ defmodule Kevo.Api.Client do
 
   defp get_unikey_code(conn, location, cookies) do
     req_headers = [{"Cookie", Enum.join(cookies, "; ")}]
-    request = %Request{method: "GET", location: location, headers: req_headers}
+    request = %Request{method: "GET", path: location, headers: req_headers}
     stream_ref = :gun.get(conn, location, req_headers)
 
     case :gun.await(conn, stream_ref) do
@@ -250,7 +266,7 @@ defmodule Kevo.Api.Client do
 
     request = %Request{
       method: "POST",
-      location: "/connect/token",
+      path: "/connect/token",
       headers: req_headers,
       body: req_body
     }
@@ -285,20 +301,21 @@ defmodule Kevo.Api.Client do
   def initializing(:internal, :initialize, %{username: username, password: password}) do
     Logger.debug("performing login", state: :initializing)
 
-    with {:ok, %Auth{} = auth} <- login(username, password) do
-      {:next_state, :disconnected,
-       %Data{
-         :username => username,
-         :password => password,
-         :access_token => auth.access_token,
-         :id_token => auth.id_token,
-         :refresh_token => auth.refresh_token,
-         :expires_at => auth.expires_at,
-         :user_id => auth.user_id
-       }}
-    else
-      err ->
-        {:stop, :login_failed, err}
+    case login(username, password) do
+      {:ok, %Auth{} = auth} ->
+        {:next_state, :disconnected,
+         %Data{
+           :username => username,
+           :password => password,
+           :access_token => auth.access_token,
+           :id_token => auth.id_token,
+           :refresh_token => auth.refresh_token,
+           :expires_at => auth.expires_at,
+           :user_id => auth.user_id
+         }}
+
+      {:error, error} ->
+        {:stop, :login_failed, {:error, error}}
     end
   end
 
@@ -369,9 +386,7 @@ defmodule Kevo.Api.Client do
 
   # open for business
   def connected({:call, from}, call, %Data{} = data) do
-    Logger.debug(%{from: from, call: call, state: :connected, data: data}, format_cb: nil)
-
-    {request, callback} = dispatch(call, data)
+    Logger.debug("Kevo HTTP/2 API opened", state: :connected)
 
     %Data{
       access_token: access_token,
@@ -379,12 +394,19 @@ defmodule Kevo.Api.Client do
       streams: streams
     } = data
 
-    {verb, location, headers, body} = request
+    {request, callback} = dispatch(call, data)
+
+    %Request{
+      method: method,
+      path: path,
+      headers: headers,
+      body: body
+    } = request
 
     with {:ok, data} <- check_refresh(data),
          {:ok, snonce} <- get_server_nonce(api_conn) do
       headers = headers(access_token, snonce, headers)
-      stream_ref = :gun.request(api_conn, verb, location, headers, body)
+      stream_ref = :gun.request(api_conn, method, path, headers, body)
 
       stream_data = %StreamData{
         from: from,
@@ -400,24 +422,11 @@ defmodule Kevo.Api.Client do
     end
   end
 
-  # connection dropped
-  def connected(:info, {:gun_down, conn, _, reason, _}, %Data{} = data) do
-    Logger.debug("Kevo API connection closed: #{inspect(reason)}", state: :connected)
-
-    # stop gun from reopening connection
-    :ok = :gun.close(conn)
-    :ok = :gun.flush(conn)
-
-    {:next_state, :disconnected, %{data | api_conn: nil}}
-  end
-
-  # got response without a body
+  # stream got response w/o body
   def connected(:info, {:gun_response, _, stream_ref, :fin, status, headers}, %Data{} = data) do
-    %Data{
-      streams: streams
-    } = data
+    %Data{streams: streams} = data
 
-    %{
+    %StreamData{
       from: from,
       request: request,
       callback: callback
@@ -430,11 +439,9 @@ defmodule Kevo.Api.Client do
     {:keep_state, %{data | streams: streams}, [{:reply, from, result}]}
   end
 
-  # got response with a body
+  # stream got response w/ incoming body
   def connected(:info, {:gun_response, _, stream_ref, :nofin, status, headers}, %Data{} = data) do
-    %Data{
-      streams: streams
-    } = data
+    %Data{streams: streams} = data
 
     stream_data =
       Map.fetch!(streams, stream_ref)
@@ -446,25 +453,22 @@ defmodule Kevo.Api.Client do
     {:keep_state, %{data | streams: streams}}
   end
 
-  # got some data
+  # stream got more data
   def connected(:info, {:gun_data, _, stream_ref, :nofin, bin}, %Data{} = data) do
-    %Data{
-      streams: streams
-    } = data
+    %Data{streams: streams} = data
 
     stream_data =
       Map.fetch!(streams, stream_ref)
       |> Map.update!(:body, fn buf -> <<buf::bytes, bin::bytes>> end)
 
     streams = Map.put(streams, stream_ref, stream_data)
+
     {:keep_state, %{data | streams: streams}}
   end
 
-  # final data received
+  # stream got final data
   def connected(:info, {:gun_data, _, stream_ref, :fin, bin}, %Data{} = data) do
-    %Data{
-      streams: streams
-    } = data
+    %Data{streams: streams} = data
 
     %StreamData{
       from: from,
@@ -478,31 +482,56 @@ defmodule Kevo.Api.Client do
     reply = callback.(request, status, headers, <<body::bytes, bin::bytes>>)
 
     streams = Map.delete(streams, stream_ref)
+
     {:keep_state, %{data | streams: streams}, [{:reply, from, reply}]}
   end
 
-  def connected(:info, gun_msg, %Data{}) do
-    Logger.info(%{
-      unexpected_gun_msg: gun_msg
-    })
+  # connection dropped
+  def connected(:info, {:gun_down, conn, _, reason, dead_streams}, %Data{} = data) do
+    %Data{streams: streams} = data
+
+    Logger.debug("Kevo API connection closed: #{inspect(reason)}", state: :connected)
+
+    # stop gun from reopening connection
+    :ok = :gun.close(conn)
+    :ok = :gun.flush(conn)
+
+    err_reply_actions =
+      dead_streams
+      |> Stream.map(&Map.get(streams, &1))
+      |> Enum.map(fn stream_ref ->
+        %StreamData{
+          request: request,
+          from: from
+        } = Map.fetch!(streams, stream_ref)
+
+        {:reply, from, Kevo.ApiError.from_network(request, reason)}
+      end)
+
+    {
+      :next_state,
+      :disconnected,
+      %{data | api_conn: nil, streams: %{}},
+      err_reply_actions
+    }
   end
 
   ## Dispatch
 
   defp dispatch(:get_locks, %Data{} = data),
-    do: {GetLocks.request(data.user_id), &GetLocks.handle/4}
+    do: {Getlocks.request(data.user_id), &Getlocks.handle/4}
 
   defp dispatch({:get_lock, lock_id}, _),
-    do: {GetLock.request(lock_id), &GetLock.handle/4}
+    do: {Getlock.request(lock_id), &Getlock.handle/4}
 
   defp dispatch({:lock, lock_id}, %Data{user_id: user_id}),
-    do: {SendCommand.request(user_id, lock_id, lock_state_lock()), &SendCommand.handle/4}
+    do: {Sendcommand.request(user_id, lock_id, lock_state_lock()), &Sendcommand.handle/4}
 
   defp dispatch({:unlock, lock_id}, %Data{user_id: user_id}),
-    do: {SendCommand.request(user_id, lock_id, lock_state_unlock()), &SendCommand.handle/4}
+    do: {Sendcommand.request(user_id, lock_id, lock_state_unlock()), &Sendcommand.handle/4}
 
   defp dispatch({:get_events, lock_id, page, page_size}, _),
-    do: {GetEvents.request(lock_id, page, page_size), &GetEvents.handle/4}
+    do: {Getevents.request(lock_id, page, page_size), &Getevents.handle/4}
 
   ## Network calling functions
 
@@ -527,7 +556,7 @@ defmodule Kevo.Api.Client do
     end
   end
 
-  # Obtains a new refresh token.
+  # Obtains a new refresh token (blocking)
   defp do_refresh(conn, refresh_token) do
     req_body =
       Jason.encode!(%{
@@ -537,7 +566,7 @@ defmodule Kevo.Api.Client do
         "refresh_token" => refresh_token
       })
 
-    request = %Request{method: "POST", location: "/connect/token", headers: [], body: req_body}
+    request = %Request{method: "POST", path: "/connect/token", headers: [], body: req_body}
     stream_ref = :gun.post(conn, "/connect/token", [], req_body)
 
     with {:response, :nofin, 200, _headers} <- :gun.await(conn, stream_ref),
@@ -562,24 +591,26 @@ defmodule Kevo.Api.Client do
     end
   end
 
+  # Obtains a server n-once (blocking)
   defp get_server_nonce(conn) do
-    location = "/api/v2/nonces"
+    path = "/api/v2/nonces"
     req_headers = [{"Content-Type", "application/json"}]
     body = ~s({"headers":{"Accept": "application/json"}})
 
     request = %Request{
       method: "POST",
-      location: location,
+      path: path,
       headers: req_headers,
       body: body
     }
 
-    stream_ref = :gun.post(conn, location, req_headers, body)
+    stream_ref = :gun.post(conn, path, req_headers, body)
 
     case :gun.await(conn, stream_ref) do
       {:response, :nofin, 201, res_headers} = response ->
-        # Consume the rest of the response
+        # Consume the remaining gun messages
         :gun.await_body(conn, stream_ref)
+
         case List.keyfind(res_headers, "x-unikey-nonce", 0) do
           {"x-unikey-nonce", server_nonce} ->
             {:ok, server_nonce}
@@ -625,8 +656,7 @@ defmodule Kevo.Api.Client do
     end)
   end
 
-  @spec generate_certificate(device_uuid4 :: String.t()) :: binary()
-  def generate_certificate(device_uuid4) do
+  defp generate_certificate(device_uuid4) do
     e = unix_now()
 
     Base.encode64(

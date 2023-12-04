@@ -1,13 +1,9 @@
 defmodule Kevo do
   @moduledoc """
-  Todo: Write some nice documentation here :)
+  Top-level interface and supervisor for Kevo's API.
   """
-  use Supervisor
 
-  # crib the naming scheme from Finch - they do it right.
-  # Module.start_link parses the keyword list for the config map
-  # config map's passed to `Supervisor.start_link`
-  # name's passed as an OTP option
+  use Supervisor
 
   @spec start_link(opts :: keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
@@ -48,19 +44,19 @@ defmodule Kevo do
   @doc """
   Retrieves the given lock's state.
   """
-  @spec get_lock(String.t()) :: {:ok, any()} | {:error, Kevo.Api.Error.t()}
+  @spec get_lock(String.t()) :: {:ok, any()} | {:error, Kevo.ApiError.t()}
   defdelegate get_lock(lock_id), to: Kevo.Api
 
   @doc """
   Locks the given lock.
   """
-  @spec lock(String.t()) :: :ok | {:error, Kevo.Api.Error.t()}
+  @spec lock(String.t()) :: :ok | {:error, Kevo.ApiError.t()}
   defdelegate lock(lock_id), to: Kevo.Api
 
   @doc """
   Unlocks the given lock.
   """
-  @spec unlock(String.t()) :: :ok | {:error, Kevo.Api.Error.t()}
+  @spec unlock(String.t()) :: :ok | {:error, Kevo.ApiError.t()}
   defdelegate unlock(lock_id), to: Kevo.Api
 
   @doc """

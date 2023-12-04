@@ -1,15 +1,14 @@
 defmodule Kevo.StateMachineTranslator do
-  @moduledoc """
-  Translate error reports for `:gen_statem` modules in Elixir.
+  @moduledoc false
 
-  By default, Elixir will ignore these messages altogether, see [this
-  ElixirForum
-  post](https://elixirforum.com/t/why-does-logger-translator-ignore-gen-statem-reports/37418).
-  A possible workaround seems to be using the `gen_state_machine` library, but
-  pulling in a library purely to have error reporting for something built-in to
-  OTP seems pretty strange to me.
-  """
-  @moduledoc since: "0.9.0"
+  # Translate error reports for `:gen_statem` modules in Elixir.
+  #
+  # By default, Elixir will ignore these messages altogether, see [this
+  # ElixirForum
+  # post](https://elixirforum.com/t/why-does-logger-translator-ignore-gen-statem-reports/37418).
+  # A possible workaround seems to be using the `gen_state_machine` library, but
+  # pulling in a library purely to have error reporting for something built-in to
+  # OTP seems pretty strange to me.
 
   # https://github.com/elixir-lang/elixir/blob/d30c5c0185607f08797441ab8af12636ad8dbd7e/lib/logger/lib/logger/translator.ex#L39
   def translate(min_level, :error, :report, {:logger, %{label: label} = report}) do

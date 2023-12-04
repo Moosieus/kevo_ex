@@ -1,7 +1,6 @@
 defmodule Kevo.Api.Auth do
-  @moduledoc """
-  An auth response from logging in.
-  """
+  @moduledoc false
+
   defstruct [
     :access_token,
     :id_token,

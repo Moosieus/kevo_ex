@@ -1,8 +1,14 @@
 defmodule Kevo.Api.Queries.Getlocks do
-  alias Kevo.Api.Error, as: Err
+  @moduledoc false
+
+  alias Kevo.Api.Request
+  alias Kevo.ApiError, as: Err
 
   def request(user_id) do
-    {"GET", "/api/v2/users/#{user_id}/locks", [], <<>>}
+    %Request{
+      method: "GET",
+      path: "/api/v2/users/#{user_id}/locks"
+    }
   end
 
   def handle(request, 200, _headers, body) do

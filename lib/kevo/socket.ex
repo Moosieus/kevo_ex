@@ -1,9 +1,8 @@
 defmodule Kevo.Socket do
-  @moduledoc """
-  A websocket client for receiving events from Kevo.
+  @moduledoc false
 
-  The relationship's receive-only, Kevo doesn't take any messages from the client.
-  """
+  # A websocket client for receiving events from Kevo.
+  # The relationship's receive-only, Kevo doesn't take any messages from the client.
 
   @behaviour :gen_statem
 
@@ -50,7 +49,7 @@ defmodule Kevo.Socket do
       callback_module: callback_module
     }
 
-    Logger.debug("websocket connection established.", state: :initializing)
+    Logger.debug("websocket connection established", state: :initializing)
 
     {:next_state, :connected, data}
   end
@@ -62,8 +61,6 @@ defmodule Kevo.Socket do
       ) do
     Logger.debug("got websocket message", state: :connected)
 
-    # Logger.info(msg: "websocket message", frame: frame)
-
     Jason.decode!(frame)
     |> callback_module.handle_event()
 
@@ -73,7 +70,7 @@ defmodule Kevo.Socket do
   # websocket closed
 
   def connected(:info, {:gun_ws, conn, stream, :close}, %{conn: conn, stream: stream} = _data) do
-    Logger.debug("websocket closed (unknown reason)", state: :connected)
+    Logger.debug("websocket died", state: :connected)
 
     {
       :keep_state_and_data,
@@ -82,9 +79,7 @@ defmodule Kevo.Socket do
   end
 
   def connected(:info, {:gun_ws, conn, _stream, {:close, errno, reason}}, %{conn: conn} = _data) do
-    Logger.debug("websocket closed (errno #{errno}, reason #{inspect(reason)})",
-      state: :connected
-    )
+    Logger.debug("websocket closed (errno #{errno}): #{inspect(reason)}", state: :connected, reason: reason)
 
     {
       :keep_state_and_data,
@@ -92,8 +87,8 @@ defmodule Kevo.Socket do
     }
   end
 
-  def connected(:info, {:gun_down, conn, _proto, _reason, _killed_streams}, %{conn: conn} = _data) do
-    Logger.debug("Lost complete shard connection. Attempting reconnect.", state: :connected)
+  def connected(:info, {:gun_down, conn, _proto, _reason, _dead_streams}, %{conn: conn} = _data) do
+    Logger.debug("underlying websocket connection died", state: :connected)
 
     {
       :keep_state_and_data,

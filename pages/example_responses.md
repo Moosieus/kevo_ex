@@ -1,12 +1,10 @@
-# Example API Responses
+# example responses
 The API responses are rather expansive, so example responses are documented here.
 
-Since this API's reverse engineered, these structures may be subject to change over time.
+Since this API's reverse engineered these structures may be subject to change over time.
 
-### `Kevo.Api.get_lock/1`
-`Kevo.Api.get_locks/0` follows the same structure in a list.
-
-```Elixir
+### `Kevo.get_lock/1`
+```elixir
 %{
   "batteryChargeStatus" => 0,
   "batteryLevel" => 40,
@@ -169,10 +167,13 @@ Since this API's reverse engineered, these structures may be subject to change o
 }
 ```
 
-### `Kevo.Api.get_events/3`
+### `Kevo.get_locks/0`
+A list of locks following the above schema.
+
+### `Kevo.get_events/3`
 Events appear to be in descending order, recent to oldest.
 
-```Elixir
+```elixir
 %{
   "currentPage" => 1,
   "events" => [
@@ -214,7 +215,7 @@ Events appear to be in descending order, recent to oldest.
 }
 ```
 
-### `Kevo.Socket` events:
+### Websocket events:
 Here's a few events in descending order. First toggling the lock via bluetooth, then manually:
 
 ```elixir

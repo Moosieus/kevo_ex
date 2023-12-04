@@ -1,6 +1,5 @@
 defmodule Kevo.Api.Request do
-  @moduledoc """
-  Used for logging errors.
-  """
-  defstruct method: "", location: "", headers: [], body: <<>>
+  @moduledoc false
+
+  defstruct [:method, :path, headers: [], body: <<>>]
 end

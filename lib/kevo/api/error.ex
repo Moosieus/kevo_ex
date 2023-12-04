@@ -1,4 +1,8 @@
-defmodule Kevo.Api.Error do
+defmodule Kevo.ApiError do
+  @moduledoc """
+  Represents a failed response from Kevo's HTTP/2 API.
+  """
+
   defexception [
     # :network_error, :unexpected_status, :unexpected_body
     :reason,
@@ -14,7 +18,7 @@ defmodule Kevo.Api.Error do
     :step
   ]
 
-  @type t :: %Kevo.Api.Error{
+  @type t :: %Kevo.ApiError{
           reason: :network_error | :unexpected_status | :unexpected_body,
           request: map(),
           response: any(),
