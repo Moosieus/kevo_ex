@@ -27,7 +27,19 @@ defmodule Kevo.Api.Client do
       :refresh_token,
       :expires_at,
       :user_id,
-      :api_conn
+      :api_conn,
+      streams: %{}
+    ]
+  end
+
+  defmodule StreamData do
+    defstruct [
+      :from,
+      :request,
+      :callback,
+      :status,
+      :headers,
+      :body
     ]
   end
 
@@ -339,35 +351,62 @@ defmodule Kevo.Api.Client do
     Logger.debug("retreiving websocket init data", state: :connected)
 
     %Data{
+      api_conn: api_conn,
       access_token: access_token,
-      user_id: user_id
+      user_id: user_id,
+      streams: streams
     } = data
 
-    reply =
-      case get_server_nonce(data.api_conn) do
-        {:ok, snonce} ->
-          {:ok, {access_token, user_id, snonce}}
+    request = GetServerNonce.request()
+    {verb, location, headers, body} = request
 
-        {:error, error} ->
-          {:error, error}
-      end
+    stream_ref = :gun.request(api_conn, verb, location, headers, body)
 
-    {:keep_state, data, [{:reply, from, reply}]}
+    streams =
+      Map.put(streams, stream_ref, %StreamData{
+        from: from,
+        request: request,
+        callback: fn r, s, h, b ->
+          case GetServerNonce.handle(r, s, h, b) do
+            {:ok, snonce} ->
+              {:ok, {access_token, user_id, snonce}}
+
+            {:error, error} ->
+              {:error, error}
+          end
+        end
+      })
+
+    {:keep_state, %{data | streams: streams}}
   end
 
   # open for business
   def connected({:call, from}, call, %Data{} = data) do
     Logger.debug(%{from: from, call: call, state: :connected, data: data}, format_cb: nil)
 
-    %{
+    {request, callback} = dispatch(call, data)
+
+    %Data{
       access_token: access_token,
-      api_conn: api_conn
+      api_conn: api_conn,
+      streams: streams
     } = data
+
+    {verb, location, headers, body} = request
 
     with {:ok, data} <- check_refresh(data),
          {:ok, snonce} <- get_server_nonce(api_conn) do
-      resp = dispatch(call, headers(access_token, snonce), data)
-      {:keep_state, data, [{:reply, from, resp}]}
+      headers = headers(access_token, snonce, headers)
+      stream_ref = :gun.request(api_conn, verb, location, headers, body)
+
+      stream_data = %StreamData{
+        from: from,
+        request: request,
+        callback: callback
+      }
+
+      streams = streams |> Map.put(stream_ref, stream_data)
+      {:keep_state, %{data | streams: streams}}
     else
       err ->
         {:keep_state, data, [{:reply, from, err}]}
@@ -385,125 +424,98 @@ defmodule Kevo.Api.Client do
     {:next_state, :disconnected, %{data | api_conn: nil}}
   end
 
-  def connected(:info, {:gun_data, _conn, _stream, _fin, _body}, _data) do
-    Logger.debug("gun_data but we await, so just eat the message.", state: :connected)
+  # got response without a body
+  def connected(:info, {:gun_response, _, stream_ref, :fin, status, headers}, %Data{} = data) do
+    %Data{
+      streams: streams
+    } = data
 
-    # I'll have to refactor this to work concurrently later, given gun's gonna do this anyway.
+    %{
+      from: from,
+      request: request,
+      callback: callback
+    } = Map.fetch!(streams, stream_ref)
 
-    :keep_state_and_data
+    result = callback.(request, status, headers, <<>>)
+
+    streams = Map.delete(streams, stream_ref)
+
+    {:keep_state, %{data | streams: streams}, [{:reply, from, result}]}
   end
 
-  ## REST API Calls
+  # got response with a body
+  def connected(:info, {:gun_response, _, stream_ref, :nofin, status, headers}, %Data{} = data) do
+    %Data{
+      streams: streams
+    } = data
 
-  defp dispatch(:get_locks, req_headers, %Data{} = data),
-    do: do_get_locks(data.api_conn, req_headers, data.user_id)
+    stream_data =
+      Map.fetch!(streams, stream_ref)
+      |> Map.put(:status, status)
+      |> Map.put(:headers, headers)
+      |> Map.put(:body, <<>>)
 
-  defp dispatch({:get_lock, lock_id}, req_headers, %Data{} = data),
-    do: do_get_lock(data.api_conn, req_headers, lock_id)
-
-  defp dispatch({:get_events, lock_id, page, page_size}, req_headers, %Data{} = data),
-    do: do_get_events(data.api_conn, req_headers, lock_id, page, page_size)
-
-  defp dispatch({:lock, lock_id}, req_headers, %Data{} = data),
-    do: send_command(data.api_conn, req_headers, data.user_id, lock_id, lock_state_lock())
-
-  defp dispatch({:unlock, lock_id}, req_headers, %Data{} = data),
-    do: send_command(data.api_conn, req_headers, data.user_id, lock_id, lock_state_unlock())
-
-  defp do_get_lock(conn, req_headers, lock_id) do
-    location = "/api/v2/locks/#{lock_id}"
-    request = %Request{method: "GET", location: location, headers: req_headers}
-    stream_ref = :gun.get(conn, location, req_headers)
-
-    with {:response, :nofin, 200, _headers} <- :gun.await(conn, stream_ref),
-         {:ok, body} <- :gun.await_body(conn, stream_ref),
-         {:ok, lock} <- Jason.decode(body) do
-      {:ok, lock}
-    else
-      {:response, _, _, _} = response ->
-        Error.from_status(request, response, 200)
-
-      {:error, %Jason.DecodeError{} = error} ->
-        Error.from_body(request, error)
-
-      {:error, error} ->
-        Error.from_network(request, error)
-    end
+    streams = Map.put(streams, stream_ref, stream_data)
+    {:keep_state, %{data | streams: streams}}
   end
 
-  defp do_get_locks(conn, req_headers, user_id) do
-    alias Kevo.Api.Error, as: Err
+  # got some data
+  def connected(:info, {:gun_data, _, stream_ref, :nofin, bin}, %Data{} = data) do
+    %Data{
+      streams: streams
+    } = data
 
-    location = "/api/v2/users/#{user_id}/locks"
-    request = %Request{method: "GET", location: location, headers: req_headers}
-    stream_ref = :gun.get(conn, location, req_headers)
+    stream_data =
+      Map.fetch!(streams, stream_ref)
+      |> Map.update!(:body, fn buf -> <<buf::bytes, bin::bytes>> end)
 
-    with {:response, :nofin, 200, _} <- :gun.await(conn, stream_ref),
-         {:ok, body} <- :gun.await_body(conn, stream_ref) do
-      case Jason.decode(body) do
-        {:ok, %{"locks" => locks}} ->
-          Logger.info(body)
-          {:ok, locks}
-
-        {:error, error} ->
-          {:error, Err.from_body(request, error)}
-      end
-    else
-      {:response, :nofin, status, res_headers} ->
-        {:error, Err.from_status(request, {status, res_headers}, 200)}
-
-      {:error, error} ->
-        {:error, Err.from_network(request, error)}
-    end
+    streams = Map.put(streams, stream_ref, stream_data)
+    {:keep_state, %{data | streams: streams}}
   end
 
-  defp do_get_events(conn, req_headers, lock_id, page, page_size) do
-    alias Kevo.Api.Error, as: Err
+  # final data received
+  def connected(:info, {:gun_data, _, stream_ref, :fin, bin}, %Data{} = data) do
+    %Data{
+      streams: streams
+    } = data
 
-    location = "/api/v2/locks/#{lock_id}/events?page=#{page}&pageSize=#{page_size}"
-    request = %Request{method: "GET", location: location, headers: req_headers}
-    stream_ref = :gun.get(conn, location, req_headers)
+    %StreamData{
+      from: from,
+      request: request,
+      callback: callback,
+      status: status,
+      headers: headers,
+      body: body
+    } = Map.fetch!(streams, stream_ref)
 
-    with {:response, :nofin, 200, _} <- :gun.await(conn, stream_ref),
-         {:ok, body} = :gun.await_body(conn, stream_ref),
-         {:ok, events} <- Jason.decode(body) do
-      Logger.info(body)
-      {:ok, events}
-    else
-      {:response, _, status, headers} ->
-        {:error, Err.from_status(request, {status, headers}, 200)}
+    reply = callback.(request, status, headers, <<body::bytes, bin::bytes>>)
 
-      {:error, %Jason.DecodeError{} = err} ->
-        {:error, Err.from_body(request, err)}
-
-      {:error, error} ->
-        {:error, Err.from_network(request, error)}
-    end
+    streams = Map.delete(streams, stream_ref)
+    {:keep_state, %{data | streams: streams}, [{:reply, from, reply}]}
   end
 
-  defp send_command(conn, req_headers, user_id, lock_id, command) do
-    alias Kevo.Api.Error, as: Err
-
-    location = "/api/v2/users/#{user_id}/locks/#{lock_id}/commands"
-    req_body = Jason.encode!(%{"command" => command})
-
-    req_headers = [
-      {"Content-Type", "application/json"},
-      {"Content-Length", "#{byte_size(req_body)}"} | req_headers
-    ]
-
-    request = %Request{method: "POST", location: location, headers: req_headers, body: req_body}
-
-    stream_ref = :gun.post(conn, location, req_headers, req_body)
-
-    case :gun.await(conn, stream_ref) do
-      {:response, _, 201, _} ->
-        :ok
-
-      {:response, _, status, res_headers} ->
-        {:error, Err.from_status(request, {status, res_headers}, 201)}
-    end
+  def connected(:info, gun_msg, %Data{}) do
+    Logger.info(%{
+      unexpected_gun_msg: gun_msg
+    })
   end
+
+  ## Dispatch
+
+  defp dispatch(:get_locks, %Data{} = data),
+    do: {GetLocks.request(data.user_id), &GetLocks.handle/4}
+
+  defp dispatch({:get_lock, lock_id}, _),
+    do: {GetLock.request(lock_id), &GetLock.handle/4}
+
+  defp dispatch({:lock, lock_id}, %Data{user_id: user_id}),
+    do: {SendCommand.request(user_id, lock_id, lock_state_lock()), &SendCommand.handle/4}
+
+  defp dispatch({:unlock, lock_id}, %Data{user_id: user_id}),
+    do: {SendCommand.request(user_id, lock_id, lock_state_unlock()), &SendCommand.handle/4}
+
+  defp dispatch({:get_events, lock_id, page, page_size}, _),
+    do: {GetEvents.request(lock_id, page, page_size), &GetEvents.handle/4}
 
   ## Network calling functions
 
@@ -597,13 +609,13 @@ defmodule Kevo.Api.Client do
 
   ## Static functions
 
-  defp headers(access_token, server_nonce) do
+  defp headers(access_token, server_nonce, query_headers) do
     [
       {"X-unikey-cnonce", client_nonce()},
       {"X-unikey-context", "Web"},
       {"X-unikey-nonce", server_nonce},
       {"Authorization", "Bearer " <> access_token},
-      {"Accept", "application/json"}
+      {"Accept", "application/json"} | query_headers
     ]
   end
 

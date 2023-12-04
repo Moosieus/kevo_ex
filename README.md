@@ -3,12 +3,12 @@ An Elixir client library for Kevo's reverse engineered web API.
 
 Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikely to receive support for [Seam](https://www.seam.co/), the existing web API should (hopefully) remain (relatively) stable.
 
-## Todo
-- Evaluate improving websocket API
+## Todo Before `0.1.0`
+- Improve websocket API
 - Diagnose websocket quietly dropping
 - Add function and module docs
 - Use structured logging with format callback functions
-  - Provide a format callback in the metadata (straightforward enough...)
+  - Provide a format callback in the metadata (straightforward enough)
   - Where do I add the 'middleware' to call said callback? (Maybe `Logger.Translator`)
   - Translator should only affect this application and none others
 - Refactor `Kevo.Api.Client` to process messages concurrently
