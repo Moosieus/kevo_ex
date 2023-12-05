@@ -60,6 +60,7 @@ To receive websocket events, provide a `Kevo.Handler` compliant module using the
 - Kevo's websocket accepts no messages and is receive only.
 - The websocket will only be opened if `websocket_callback` is provided.
 - This library is unopinionated about how you queue or broker events.
+- `kevo_ex` uses `:gen_statem` internally.
 
 ## Acknowledgments
 Special thanks to the following:

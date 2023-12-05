@@ -32,3 +32,5 @@ kevo_ex-*.tar
 /config/
 
 .env
+
+/scratch/

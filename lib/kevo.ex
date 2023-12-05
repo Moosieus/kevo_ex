@@ -5,6 +5,8 @@ defmodule Kevo do
 
   use Supervisor
 
+  require Logger
+
   @spec start_link(opts :: keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
     name = kevo_name!(opts)
@@ -23,6 +25,8 @@ defmodule Kevo do
 
   @impl true
   def init(config) do
+    Logger.add_translator({Kevo.StateMachineTranslator, :translate})
+
     api =
       {Kevo.Api.Client,
        [username: config.username, password: config.password, name: config.api_name]}

@@ -1,6 +1,8 @@
 defmodule Kevo.StateMachineTranslator do
   @moduledoc false
 
+  # The following was cribbed from Nostrum
+
   # Translate error reports for `:gen_statem` modules in Elixir.
   #
   # By default, Elixir will ignore these messages altogether, see [this
