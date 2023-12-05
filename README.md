@@ -38,6 +38,17 @@ Or start the client dynamically:
 Kevo.start_link([name: Kevo, username: "username", password: "password"])
 ```
 
+#### Configuration
+The following configuration options are available:
+
+`:name` - The `name` (aka alias) of the top-level supervisor (required).
+
+`:username` - Your Kevo account username (required).
+
+`:password` - Your Kevo account password (required).
+
+`:websocket_callback` - Websocket callback module (optional).
+
 #### API calls
 For querying Kevo's HTTP API, see the available functions in the `Kevo` module.
 
