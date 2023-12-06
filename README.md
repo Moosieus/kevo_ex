@@ -1,7 +1,7 @@
 # kevo_ex
 An Elixir client library for Kevo's reverse engineered web API.
 
-Kevo locks were launched in 2016 and discontinued in 2022. While they're unlikely to receive support for [Seam](https://www.seam.co/), the existing web API should (hopefully) remain (relatively) stable.
+Kevo locks were launched by Kiwkset in 2016 and discontinued in 2022. While they're unlikely to receive support for [Seam](https://www.seam.co/), the existing web API should (hopefully) remain (relatively) stable.
 
 ## Installation
 Add `:kevo_ex` to your list of dependencies in `mix.exs`:
@@ -50,17 +50,24 @@ The following configuration options are available:
 `:websocket_callback` - Websocket callback module (optional).
 
 #### API calls
-For querying Kevo's HTTP API, see the available functions in the `Kevo` module.
+`Kevo.get_locks/0` - Retrieves all locks visible to the logged in user.
+
+`Kevo.get_lock/1` - Retrieves the given lock's state.
+
+`Kevo.lock/1` - Locks the given lock.
+
+`Kevo.unlock/1` - Unlocks the given lock.
+
+`Kevo.get_events/3` - Gets the provided lock's event history. Follows the frontend's paging behavior.
 
 #### Websocket events
 To receive websocket events, provide a `Kevo.Handler` compliant module using the `websocket_callback` option. When a message is recevied, `handle_event/1` will be invoked, passing a map of the received JSON. See the page on [example responses](./pages/example_responses.md).
 
 #### Usage notes
-- API calls are made to be as non-blocking as possible.
+- API calls are made to be as concurrently as possible.
 - Kevo's websocket accepts no messages and is receive only.
 - The websocket will only be opened if `websocket_callback` is provided.
 - This library is unopinionated about how you queue or broker events.
-- `kevo_ex` uses `:gen_statem` internally.
 
 ## Acknowledgments
 Special thanks to the following:

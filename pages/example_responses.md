@@ -216,7 +216,9 @@ Events appear to be in descending order, recent to oldest.
 ```
 
 ### Websocket events:
-Here's a few events in descending order. First toggling the lock via bluetooth, then manually:
+Here's a few events in descending order, first toggling the lock via bluetooth, then manually.
+
+*Note: This isn't an exhaustive list.*
 
 ```elixir
 %{

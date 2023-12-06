@@ -718,7 +718,7 @@ defmodule Kevo.Api.Client do
       id: __MODULE__,
       start: {__MODULE__, :start_link, [opts]},
       type: :worker,
-      restart: :transient,
+      restart: :permanent,
       shutdown: 500
     }
   end
