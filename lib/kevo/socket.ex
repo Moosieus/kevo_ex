@@ -6,9 +6,6 @@ defmodule Kevo.Socket do
 
   @behaviour :gen_statem
 
-  # 15 seconds
-  @heartbeat_interval 15 * 1000
-
   require Logger
 
   import Kevo.Common
