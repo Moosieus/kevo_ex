@@ -2,7 +2,7 @@ defmodule Kevo.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/Moosieus/elixir-a2s"
+  @source_url "https://github.com/moosieus/kevo_ex"
 
   def project do
     [
@@ -64,7 +64,7 @@ defmodule Kevo.MixProject do
 
   defp package do
     [
-      name: "elixir_a2s",
+      name: "kevo_ex",
       licenses: ["MIT"],
       links: %{"GitHub" => @source_url}
     ]
