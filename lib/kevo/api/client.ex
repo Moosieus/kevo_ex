@@ -299,10 +299,12 @@ defmodule Kevo.Api.Client do
   ## State Machine
 
   def initializing(:internal, :initialize, %{username: username, password: password}) do
-    Logger.debug("performing login", state: :initializing)
+    Logger.debug("logging into Kevo...", state: :initializing)
 
     case login(username, password) do
       {:ok, %Auth{} = auth} ->
+        Logger.debug("logged into Kevo successfully", state: :initializing)
+
         {:next_state, :disconnected,
          %Data{
            :username => username,
@@ -321,7 +323,7 @@ defmodule Kevo.Api.Client do
 
   # wake from rest
   def disconnected({:call, _from}, _request, %Data{} = data) do
-    Logger.debug("got query, opening connection", state: :disconnected)
+    Logger.debug("Kevo client got call at rest, will start connection.", state: :disconnected)
 
     {:next_state, :connecting, data,
      [
@@ -333,7 +335,7 @@ defmodule Kevo.Api.Client do
 
   # startup from rest
   def connecting(:internal, :open, %Data{} = data) do
-    Logger.debug("opening Kevo API connection", state: :connecting)
+    Logger.debug("opening Kevo API connection...", state: :connecting)
 
     {:ok, api_conn} = :gun.open(~c"#{unikey_api_url_base()}", 443, gun_opts())
 
@@ -342,7 +344,7 @@ defmodule Kevo.Api.Client do
 
   # connection established -> connected
   def connecting(:info, {:gun_up, conn_pid, _}, %{api_conn: conn_pid} = data) do
-    Logger.debug("gun established connection", state: :connecting)
+    Logger.debug("Kevo API connection established", state: :connecting)
 
     {:next_state, :connected, data}
   end
@@ -365,7 +367,7 @@ defmodule Kevo.Api.Client do
 
   # special case when websocket has to start
   def connected({:call, from}, :ws_init, %Data{} = data) do
-    Logger.debug("retreiving websocket init data", state: :connected)
+    Logger.debug("retreiving Kevo websocket init data...", state: :connected)
 
     %Data{
       access_token: access_token,

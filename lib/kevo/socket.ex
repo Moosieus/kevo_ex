@@ -6,6 +6,9 @@ defmodule Kevo.Socket do
 
   @behaviour :gen_statem
 
+  # 15 seconds
+  @heartbeat_interval 15 * 1000
+
   require Logger
 
   import Kevo.Common
@@ -33,7 +36,7 @@ defmodule Kevo.Socket do
   ## State Machine
 
   def initializing(:internal, :initialize, %{callback_module: callback_module} = _data) do
-    Logger.debug("opening websocket", state: :initializing)
+    Logger.debug("opening Kevo websocket...", state: :initializing)
 
     {:ok, {access_token, user_id, snonce}} = Kevo.Api.ws_startup_config()
 
@@ -43,13 +46,13 @@ defmodule Kevo.Socket do
     stream = :gun.ws_upgrade(conn, ws_location(access_token, snonce, user_id), [@user_agent])
     {:upgrade, ["websocket"], _} = :gun.await(conn, stream, 5_000)
 
+    Logger.debug("Kevo websocket connection established", state: :initializing)
+
     data = %{
       conn: conn,
       stream: stream,
       callback_module: callback_module
     }
-
-    Logger.debug("websocket connection established", state: :initializing)
 
     {:next_state, :connected, data}
   end
@@ -59,7 +62,7 @@ defmodule Kevo.Socket do
         {:gun_ws, _worker, _stream, {:text, frame}},
         %{callback_module: callback_module} = _data
       ) do
-    Logger.debug("got websocket message", state: :connected)
+    Logger.debug("Kevo websocket got frame", state: :connected)
 
     Jason.decode!(frame)
     |> callback_module.handle_event()
@@ -70,7 +73,7 @@ defmodule Kevo.Socket do
   # websocket closed
 
   def connected(:info, {:gun_ws, conn, stream, :close}, %{conn: conn, stream: stream} = _data) do
-    Logger.debug("websocket died", state: :connected)
+    Logger.debug("Kevo websocket closed (normal/close frame)", state: :connected)
 
     {
       :keep_state_and_data,
@@ -79,7 +82,10 @@ defmodule Kevo.Socket do
   end
 
   def connected(:info, {:gun_ws, conn, _stream, {:close, errno, reason}}, %{conn: conn} = _data) do
-    Logger.debug("websocket closed (errno #{errno}): #{inspect(reason)}", state: :connected, reason: reason)
+    Logger.debug("Kevo websocket closed (errno #{errno}): #{inspect(reason)}",
+      state: :connected,
+      reason: reason
+    )
 
     {
       :keep_state_and_data,
@@ -87,8 +93,11 @@ defmodule Kevo.Socket do
     }
   end
 
-  def connected(:info, {:gun_down, conn, _proto, _reason, _dead_streams}, %{conn: conn} = _data) do
-    Logger.debug("underlying websocket connection died", state: :connected)
+  def connected(:info, {:gun_down, conn, _proto, reason, _dead_streams}, %{conn: conn} = _data) do
+    Logger.debug("underlying Kevo websocket connection died: #{inspect(reason)}",
+      state: :connected,
+      reason: reason
+    )
 
     {
       :keep_state_and_data,
@@ -96,10 +105,9 @@ defmodule Kevo.Socket do
     }
   end
 
-  # Internal event to force a complete reconnection from the connected state.
-  # Useful when the gateway told us to do so.
+  # called after connection's lost for any of the above reasons
   def connected(:internal, :reconnect, %{conn: conn} = data) do
-    Logger.debug("reconnecting", state: :connected)
+    Logger.debug("Kevo websocket reconnecting...", state: :connected)
 
     :ok = :gun.close(conn)
     :ok = :gun.flush(conn)
@@ -112,7 +120,7 @@ defmodule Kevo.Socket do
     }
   end
 
-  # need to call "/login" to get access token
+  # websocket connection endpoint
   defp ws_location(access_token, server_nonce, user_id) do
     client_nonce = client_nonce()
 
