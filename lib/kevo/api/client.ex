@@ -61,14 +61,27 @@ defmodule Kevo.Api.Client do
   @impl true
   def callback_mode, do: :state_functions
 
+  ## Initialization
+
+  def child_spec(opts) do
+    %{
+      id: name!(opts),
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :permanent,
+      # wait 1s to avoid API spam
+      shutdown: 1000
+    }
+  end
+
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
     config = %{
-      username: Keyword.fetch!(opts, :username),
-      password: Keyword.fetch!(opts, :password)
+      username: username!(opts),
+      password: password!(opts)
     }
 
-    :gen_statem.start_link({:local, __MODULE__}, __MODULE__, config, opts)
+    :gen_statem.start_link({:local, name!(opts)}, __MODULE__, config, opts)
   end
 
   @impl true
@@ -76,7 +89,19 @@ defmodule Kevo.Api.Client do
     {:ok, :initializing, data, [{:next_event, :internal, :initialize}]}
   end
 
-  # obtain authentication (blocking)
+  defp name!(opts) do
+    Keyword.get(opts, :name) || raise(ArgumentError, "must supply a name")
+  end
+
+  defp username!(opts) do
+    Keyword.get(opts, :username) || raise(ArgumentError, "must supply a username")
+  end
+
+  defp password!(opts) do
+    Keyword.get(opts, :password) || raise(ArgumentError, "must supply a password")
+  end
+
+  # Authenticate with Kevo (blocking)
   defp login(username, password) do
     {code_verifier, code_challenge} = Kevo.Pkce.generate_pkce_pair()
     device_id = UUID.uuid4()
@@ -106,7 +131,7 @@ defmodule Kevo.Api.Client do
     end
   end
 
-  # Login sub-functions (blocking)
+  ## Login helpers
 
   defp auth_url(code_challenge, device_uuid4) do
     certificate = generate_certificate(device_uuid4)
@@ -388,7 +413,7 @@ defmodule Kevo.Api.Client do
 
   # open for business
   def connected({:call, from}, call, %Data{} = data) do
-    Logger.debug("Kevo HTTP/2 API opened", state: :connected)
+    Logger.debug("Kevo API got call", state: :connected)
 
     %Data{
       access_token: access_token,
@@ -535,7 +560,7 @@ defmodule Kevo.Api.Client do
   defp dispatch({:get_events, lock_id, page, page_size}, _),
     do: {Getevents.request(lock_id, page, page_size), &Getevents.handle/4}
 
-  ## Network calling functions
+  ## Helper functions (network)
 
   # Checks if a new refresh token is needed and obtains it if needed.
   defp check_refresh(state) do
@@ -629,7 +654,7 @@ defmodule Kevo.Api.Client do
     end
   end
 
-  ## Static functions
+  ## Helper functions
 
   defp headers(access_token, server_nonce, query_headers) do
     [
@@ -704,22 +729,5 @@ defmodule Kevo.Api.Client do
     bin
     |> :binary.decode_unsigned(:little)
     |> :binary.encode_unsigned(:big)
-  end
-
-  @doc false
-  def __format_cb__(%{state: :closed, reason: reason}) do
-    {"Kevo API connection closed: ~p", [reason]}
-  end
-
-  ## Configuration
-
-  def child_spec(opts) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, [opts]},
-      type: :worker,
-      restart: :permanent,
-      shutdown: 500
-    }
   end
 end

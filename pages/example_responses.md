@@ -3,6 +3,25 @@ The API responses are rather expansive, so example responses are documented here
 
 Since this API's reverse engineered these structures may be subject to change over time.
 
+### Basic test script
+You can use this script evaluate responses for yourself.
+```elixir
+defmodule TestCallback do
+  def handle_event(json) do
+    IO.inspect(json, label: "Got a websocket message •ᴗ•")
+  end
+end
+
+Logger.configure(level: :debug)
+
+Kevo.start_link([
+  name: Kevo,
+  username: System.get_env("KEVO_USER"),
+  password: System.get_env("KEVO_PASSWORD"),
+  ws_callback_module: TestCallback
+])
+```
+
 ### `Kevo.get_lock/1`
 ```elixir
 %{

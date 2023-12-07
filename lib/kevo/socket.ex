@@ -10,19 +10,30 @@ defmodule Kevo.Socket do
 
   import Kevo.Common
 
-  @user_agent {"User-Agent",
-               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
-
   @impl true
   def callback_mode, do: :state_functions
+
+  ## Initialization
+
+  def child_spec(opts) do
+    %{
+      id: name!(opts),
+      start: {__MODULE__, :start_link, [opts]},
+      type: :worker,
+      restart: :permanent,
+      # wait 1s to avoid API spam
+      shutdown: 1000
+    }
+  end
 
   @spec start_link(opts :: keyword()) :: :ignore | {:error, any()} | {:ok, pid()}
   def start_link(opts) do
     config = %{
+      api_name: api_name!(opts),
       callback_module: callback_module!(opts)
     }
 
-    :gen_statem.start_link({:global, __MODULE__}, __MODULE__, config, opts)
+    :gen_statem.start_link({:local, name!(opts)}, __MODULE__, config, opts)
   end
 
   @impl true
@@ -30,26 +41,47 @@ defmodule Kevo.Socket do
     {:ok, :initializing, config, {:next_event, :internal, :initialize}}
   end
 
+  defp name!(opts) do
+    Keyword.get(opts, :name) || raise(ArgumentError, "must supply a name")
+  end
+
+  defp api_name!(opts) do
+    Keyword.get(opts, :api_name) || raise(ArgumentError, "must supply an API name")
+  end
+
+  defp callback_module!(opts) do
+    Keyword.get(opts, :callback_module) ||
+      raise(ArgumentError, "must supply a websocket callback")
+  end
+
   ## State Machine
 
-  def initializing(:internal, :initialize, %{callback_module: callback_module} = _data) do
+  def initializing(:internal, :initialize, data) do
+    %{
+      api_name: api_name
+    } = data
+
     Logger.debug("opening Kevo websocket...", state: :initializing)
 
-    {:ok, {access_token, user_id, snonce}} = Kevo.Api.ws_startup_config()
+    {:ok, {access_token, user_id, snonce}} = Kevo.Api.ws_startup_config(api_name)
 
     {:ok, conn} = :gun.open(~c"#{unikey_ws_url_base()}", 443, gun_ws_opts())
     {:ok, :http} = :gun.await_up(conn, 5_000)
 
-    stream = :gun.ws_upgrade(conn, ws_location(access_token, snonce, user_id), [@user_agent])
+    stream =
+      :gun.ws_upgrade(conn, ws_location(access_token, snonce, user_id), [
+        {"User-Agent",
+         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36"}
+      ])
+
     {:upgrade, ["websocket"], _} = :gun.await(conn, stream, 5_000)
 
     Logger.debug("Kevo websocket connection established", state: :initializing)
 
-    data = %{
-      conn: conn,
-      stream: stream,
-      callback_module: callback_module
-    }
+    data =
+      data
+      |> Map.put(:conn, conn)
+      |> Map.put(:stream, stream)
 
     {:next_state, :connected, data}
   end
@@ -139,22 +171,5 @@ defmodule Kevo.Socket do
   # Generate the verification value used to connect to the websocket.
   defp ws_verification(client_nonce, server_nonce) do
     :crypto.mac(:hmac, :sha512, client_secret(), client_nonce <> server_nonce)
-  end
-
-  ## Configuration
-
-  def child_spec(opts) do
-    %{
-      id: __MODULE__,
-      start: {__MODULE__, :start_link, [opts]},
-      type: :worker,
-      restart: :permanent,
-      shutdown: 500
-    }
-  end
-
-  defp callback_module!(opts) do
-    Keyword.get(opts, :callback_module) ||
-      raise(ArgumentError, "must supply a websocket callback")
   end
 end

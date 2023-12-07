@@ -1,7 +1,7 @@
 defmodule Kevo.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.2.0"
   @source_url "https://github.com/moosieus/kevo_ex"
 
   def project do
@@ -55,7 +55,7 @@ defmodule Kevo.MixProject do
           Kevo,
           Kevo.Handler
         ],
-        "Exceptions": [
+        Exceptions: [
           Kevo.ApiError
         ]
       ]

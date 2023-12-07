@@ -10,7 +10,7 @@ Add `:kevo_ex` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:kevo_ex, "~> 0.1.0"}
+    {:kevo_ex, "~> 0.2.0"}
   ]
 end
 ```
@@ -39,26 +39,26 @@ Kevo.start_link([name: Kevo, username: "username", password: "password"])
 ```
 
 #### Configuration
-The following configuration options are available:
+* `:name` - Alias of the top-level supervisor. Can be provided if you intend to run multiple instances of kevo_ex. Defaults to `Kevo`.
 
-`:name` - The `name` (aka alias) of the top-level supervisor (required).
+* `:username` - Your Kevo username (required).
 
-`:username` - Your Kevo account username (required).
+* `:password` - Your Kevo password (required).
 
-`:password` - Your Kevo account password (required).
-
-`:websocket_callback` - Websocket callback module (optional).
+* `:websocket_callback` - Websocket callback module. Defaults to `nil`.
 
 #### API calls
-`Kevo.get_locks/0` - Retrieves all locks visible to the logged in user.
+* `Kevo.get_locks/0` - Retrieves all locks visible to the logged in user.
 
-`Kevo.get_lock/1` - Retrieves the given lock's state.
+* `Kevo.get_lock/1` - Retrieves the given lock's state.
 
-`Kevo.lock/1` - Locks the given lock.
+* `Kevo.lock/1` - Locks the given lock.
 
-`Kevo.unlock/1` - Unlocks the given lock.
+* `Kevo.unlock/1` - Unlocks the given lock.
 
-`Kevo.get_events/3` - Gets the provided lock's event history. Follows the frontend's paging behavior.
+* `Kevo.get_events/3` - Gets the provided lock's event history. Follows the frontend's paging behavior.
+
+* `name` can be provided as an additional argument if you aren't using the default.
 
 #### Websocket events
 To receive websocket events, provide a `Kevo.Handler` compliant module using the `websocket_callback` option. When a message is recevied, `handle_event/1` will be invoked, passing a map of the received JSON. See the page on [example responses](./pages/example_responses.md).
