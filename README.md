@@ -58,7 +58,7 @@ Kevo.start_link([name: Kevo, username: "username", password: "password"])
 
 * `Kevo.get_events/3` - Gets the provided lock's event history. Follows the frontend's paging behavior.
 
-* `name` can be provided as an additional argument if you aren't using the default.
+*A `name` atom can be provided as an additional argument. Defaults to `Kevo`.*
 
 #### Websocket events
 To receive websocket events, provide a `Kevo.Handler` compliant module using the `websocket_callback` option. When a message is recevied, `handle_event/1` will be invoked, passing a map of the received JSON. See the page on [example responses](./pages/example_responses.md).
