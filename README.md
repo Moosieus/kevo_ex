@@ -25,7 +25,7 @@ kevo_opts = [
   name: Kevo,
   username: "username",
   password: "password",
-  websocket_callback: YourHandlerModule # optional
+  ws_callback_module: YourHandlerModule # optional
 ]
 
 children = [
@@ -45,7 +45,7 @@ Kevo.start_link([name: Kevo, username: "username", password: "password"])
 
 * `:password` - Your Kevo password (required).
 
-* `:websocket_callback` - Websocket callback module. Defaults to `nil`.
+* `:ws_callback_module` - Websocket callback module. Defaults to `nil`.
 
 #### API calls
 * `Kevo.get_locks/0` - Retrieves all locks visible to the logged in user.
@@ -61,12 +61,12 @@ Kevo.start_link([name: Kevo, username: "username", password: "password"])
 *A `name` atom can be provided as an additional argument. Defaults to `Kevo`.*
 
 #### Websocket events
-To receive websocket events, provide a `Kevo.Handler` compliant module using the `websocket_callback` option. When a message is recevied, `handle_event/1` will be invoked, passing a map of the received JSON. See the page on [example responses](./pages/example_responses.md).
+To receive websocket events, provide a `Kevo.Handler` compliant module using the `ws_callback_module` option. When a message is recevied, `handle_event/1` will be invoked, passing a map of the received JSON. See the page on [example responses](./pages/example_responses.md).
 
 #### Usage notes
 - API calls are made to be as concurrently as possible.
 - Kevo's websocket accepts no messages and is receive only.
-- The websocket will only be opened if `websocket_callback` is provided.
+- The websocket will only be opened if `ws_callback_module` is provided.
 - This library is unopinionated about how you queue or broker events.
 
 ## Acknowledgments

@@ -26,7 +26,7 @@ defmodule Kevo do
 
   * `:password` - Your Kevo password (required).
 
-  * `:websocket_callback` - Websocket callback module. Defaults to `nil`.
+  * `:ws_callback_module` - Websocket callback module. Defaults to `nil`.
   """
   @spec start_link(opts :: keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []) do
