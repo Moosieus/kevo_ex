@@ -113,21 +113,11 @@ defmodule Kevo.Api.Client do
          {:ok, login_form, cookies} <- get_login_page(conn, login_page_url),
          {verification_token, serialized_client} <- scrape_login_form(login_form),
          {:ok, unikey_redirect_location, cookies} <-
-           submit_login(
-             conn,
-             username,
-             password,
-             cookies,
-             serialized_client,
-             verification_token
-           ),
+           submit_login(conn, username, password, cookies, serialized_client, verification_token),
          {:ok, code} <- get_unikey_code(conn, unikey_redirect_location, cookies),
          {:ok, auth} <- post_jwt(conn, code, code_verifier, cookies),
          :ok <- :gun.close(conn) do
       {:ok, auth}
-    else
-      {:error, error} ->
-        {:error, error}
     end
   end
 
